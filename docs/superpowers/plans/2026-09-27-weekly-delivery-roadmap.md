@@ -19,6 +19,7 @@
 - Each week has one outcome, a small task list, a Friday demo and an exit check. Finish an incomplete dependency before starting the next week that needs it.
 - At 4–6 hours/week, initially spread each delivery week across two calendar weeks. At 20+ hours/week, combine weeks only after their exit checks pass; observing real sprint boundaries still takes calendar time.
 - Budget 7–8 hours for the main deliverable, 2 hours for verification/demo and 1–2 hours for rework or learning. Re-estimate after Week 2 using actual throughput.
+- Reserve two to four contingency weeks beyond the twelve — more if ADK and Google Cloud are new to you. Treat them as planned buffer: carry unfinished correctness work into them rather than weakening exit checks.
 
 ## Global constraints
 
@@ -79,11 +80,11 @@ These are future paths to guide implementation; this planning task does not crea
 **Weekly goal:** “I can run the project and retrieve a known ticket and my board configuration.”
 
 - [ ] Confirm Jira deployment, personal-pilot scope, board type, project scope, estimate field, timezone and permitted Google Cloud region/budget. If Data Center is selected, revise the adapter plan before continuing.
-- [ ] Decide pilot authentication: API token with expiry monitoring, or OAuth 3LO from the start (the shared-team phase requires 3LO; building it early avoids a collector migration).
+- [ ] Decide pilot authentication by comparing the options accurately: a scoped personal API token (per-token scopes, selectable 1–365 day expiry, central `api.atlassian.com/ex/jira/{cloudId}` endpoints) versus OAuth 3LO from the start. The shared-team phase requires 3LO; building it early avoids a collector migration. Either way, add expiry monitoring for the unattended collector.
 - [ ] Collect three representative ticket examples and one manually prepared sprint report; record current report preparation time as a baseline. Anonymize the examples before they become fixtures.
 - [ ] Set up minimal CI (lint and tests) and pre-commit secret scanning; no credential ever enters source control.
 - [ ] Set up the Python application, configuration and a typed Jira connection; fetch one known issue and board metadata without exposing credentials.
-- [ ] Write a metric-policy decision record: use “initial planned scope”; distinguish done-by-end from completed-during-sprint; define pre-closure state, rollover and human-confirmed Sprint Goal outcome. Update the source specification with these decisions.
+- [ ] Write a metric-policy decision record: use “initial planned scope”; distinguish done-by-end from completed-during-sprint; define pre-closure state, rollover and human-confirmed Sprint Goal outcome. Update the specification's metric table with these decisions as an explicit exit criterion, so the specification no longer carries the older cutoff-state definitions an implementer could follow by mistake.
 
 **Friday demo:** Run the application and show the selected board, estimate/status mapping and a known issue link.
 
@@ -107,6 +108,7 @@ These are future paths to guide implementation; this planning task does not crea
 **Weekly goal:** “I can ask a Jira question conversationally and verify the answer from its sources.”
 
 - [ ] Wrap Week 2 operations as narrow ADK tools with validated inputs and structured results.
+- [ ] Measure model calls and tokens per completed task during agent development; record them as the cost baseline the specification requires before any cost conclusion.
 - [ ] Add a small single-user interface for chat, context selection, issue links and follow-up questions. Start with short-lived conversations until persisted context has source/access tracking.
 - [ ] Make the agent resolve ambiguity, distinguish missing data from zero and avoid unsupported claims.
 - [ ] Verify that issue text cannot grant permissions or change tool rules; test no-match and revoked-access follow-ups. Never silently reuse restricted earlier context.
@@ -122,7 +124,8 @@ These are future paths to guide implementation; this planning task does not crea
 **Weekly goal:** “My sprint data continues to be collected when my laptop is off.”
 
 - [ ] Add PostgreSQL migrations for snapshots, issue events, board configuration and ingestion checkpoints.
-- [ ] Deploy a minimal private collector on the approved cloud setup: one Cloud Run service plus a Cloud Scheduler idempotent reconciliation endpoint (Cloud Tasks is deferred to the shared-team phase). Implement webhook ingestion with a secret-bearing callback URL, treated as hints only; include webhook renewal if dynamic subscriptions are used.
+- [ ] Enable persistent ADK sessions on PostgreSQL (DatabaseSessionService, user-isolated) now rather than retrofitting them in Week 12, and enable automated backups when the database is introduced.
+- [ ] Deploy a minimal private collector on the approved cloud setup: one Cloud Run service plus a Cloud Scheduler idempotent reconciliation endpoint; the Cloud Tasks queue arrives in Week 5 when asynchronous reports need it. Implement webhook ingestion using the registration method's documented authentication — dynamically registered OAuth 2.0 app webhooks with signed JWT bearer validation are the default — and give the webhook endpoint authenticated public ingress while scheduler, application and write endpoints keep separate access controls. Webhooks are hints only; include webhook renewal if dynamic subscriptions are used.
 - [ ] Monitor credential expiry: an expiring or expired token must surface as a collection-freshness alarm, not as silent gaps in history.
 - [ ] Deduplicate events, checkpoint all-page ingestion and recover from interruption. Treat webhook events as hints and reconcile against authoritative data.
 - [ ] Record sync freshness, gaps and configuration versions. Set an initial target of a successful reconciliation every 15 minutes; represent this as collection freshness, not proof that Jira indexing has no lag.
@@ -140,7 +143,7 @@ These are future paths to guide implementation; this planning task does not crea
 - [ ] Calculate current scope, status counts, configured estimates and explicit blockers in Python/SQL using a persisted set of report inputs.
 - [ ] Generate a short narrative with issue references, Sprint Goal, impediments and decisions needed. Goal achievement stays human-confirmed or unknown.
 - [ ] Add report selection/view and Markdown/CSV export, including freshness, estimate coverage and completeness labels. Sanitize CSV cells beginning with `=`, `+`, `-` or `@` and escape rendered markup.
-- [ ] Make report generation asynchronous: `build_sprint_report` returns a job handle with an estimate and a `get_report` tool reports status and results; no blocking tool call in the conversation loop.
+- [ ] Make report generation asynchronous: `build_sprint_report` returns a job handle with an estimate and a `get_report` tool reports status and results; no blocking tool call in the conversation loop. Execute jobs durably with a Cloud Tasks queue targeting the same Cloud Run service: persist job state in PostgreSQL, make execution idempotent and retry-safe, and verify a job survives an instance restart.
 - [ ] Revalidate access for every contributing issue before generation/export; check historical/cache paths as well as live search. Exclude unauthorized data from both details and totals.
 
 **Friday demo:** Generate a report for your board, verify totals manually and export the same authorized result.
@@ -183,6 +186,7 @@ These are future paths to guide implementation; this planning task does not crea
 - [ ] Revalidate Jira permissions and field metadata before creating one issue; verify the created issue and return its link.
 - [ ] Invalidate approval after draft edits. Check duplicate clicks, expired approval and application restart.
 - [ ] Handle ambiguous create timeouts: write a unique correlation marker (label or description footer) with every create, reconcile by searching for it, and mark the outcome unknown only when the marker cannot be found. Never automatically retry a potentially successful create.
+- [ ] Exercise backup and restore of approval and execution records here, so Week 12 re-verifies rather than discovers.
 
 **Friday demo:** Approve a sandbox draft, create it once and inspect the actual Jira fields and audit record.
 
@@ -233,9 +237,9 @@ These are future paths to guide implementation; this planning task does not crea
 
 **Weekly goal:** “I can use the integrated assistant for a working week and judge its practical value.”
 
-- [ ] Deploy the integrated personal app behind authentication and a single-user allowlist; add persistent sessions with source/access checks. Keep secrets outside the app image and configure cost/error visibility.
+- [ ] Deploy the integrated personal app behind authentication and a single-user allowlist, with the persistent sessions running since Week 4. Keep secrets outside the app image and configure cost/error visibility.
 - [ ] Run search, reporting, drafting, creation and update scenarios; rerun permission, approval, model-behavior and export-injection checks against the pinned release configuration.
-- [ ] Exercise backup/restore and failure recovery for the application records needed to avoid lost approvals or duplicated writes; document setup and operating steps.
+- [ ] Re-verify backup/restore and failure recovery (first exercised in Week 8) against the deployed configuration; document setup and operating steps.
 - [ ] Use the app during a working week, record defects and report-preparation time, and prioritize the next backlog from observed friction.
 
 **Friday demo:** Complete a realistic workflow from finding issues through generating a report and reviewing a ticket change.
