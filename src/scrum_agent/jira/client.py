@@ -1,20 +1,21 @@
 """Typed Jira Cloud client.
 
 Uses REST v3 for issues and the enhanced JQL search endpoint (`/rest/api/3/search/jql`
-with `nextPageToken` pagination), and the Jira Software board APIs for boards and
-board configuration. Authentication headers and base URL come from `Settings`;
-credentials are never logged.
+with `nextPageToken` pagination), and the Jira Software board/sprint APIs.
+Authentication headers and base URL come from `Settings`; credentials are never
+logged. All scope decisions delegate to the centralized `PilotScope` (Week 2).
 """
 
 from __future__ import annotations
 
 import math
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any, TypeVar
 
 import httpx
 
+from scrum_agent.auth import PilotScope
 from scrum_agent.config import Settings
 from scrum_agent.jira.errors import (
     JiraApiError,
@@ -23,16 +24,25 @@ from scrum_agent.jira.errors import (
     JiraPermissionError,
     JiraRateLimitedError,
 )
-from scrum_agent.jira.models import Board, BoardConfiguration, Issue
+from scrum_agent.jira.models import Board, BoardConfiguration, Issue, Sprint
 
 _T = TypeVar("_T")
 
 _SEARCH_FIELDS = ["summary", "status", "issuetype", "assignee", "updated"]
 
+_SPRINT_STATES = ("future", "active", "closed")
+
 
 class JiraClient:
-    def __init__(self, settings: Settings, *, transport: httpx.BaseTransport | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        transport: httpx.BaseTransport | None = None,
+        scope: PilotScope | None = None,
+    ):
         self._settings = settings
+        self._scope = scope if scope is not None else PilotScope.from_settings(settings)
         self._http = httpx.Client(
             base_url=settings.base_url(),
             headers=settings.auth_headers(),
@@ -48,6 +58,11 @@ class JiraClient:
 
     def close(self) -> None:
         self._http.close()
+
+    @property
+    def scope(self) -> PilotScope:
+        """The centralized pilot scope every read is checked against."""
+        return self._scope
 
     # -- low-level ---------------------------------------------------------
 
@@ -113,13 +128,10 @@ class JiraClient:
             raise JiraApiError("Jira returned incomplete or invalid resource data") from None
 
     def _check_issue_scope(self, issue_key: str) -> None:
-        pattern = rf"{re.escape(self._settings.jira_project_key)}-[1-9][0-9]*"
-        if not re.fullmatch(pattern, issue_key):
-            raise JiraPermissionError("Issue is outside the configured pilot project")
+        self._scope.assert_issue_key(issue_key)
 
     def _check_board_scope(self, board_id: int) -> None:
-        if board_id != self._settings.jira_board_id:
-            raise JiraPermissionError("Board is outside the configured pilot scope")
+        self._scope.assert_board_id(board_id)
 
     # -- reads -------------------------------------------------------------
 
@@ -142,6 +154,64 @@ class JiraClient:
         return self._parse_response(
             BoardConfiguration.from_api,
             self._request("GET", f"/rest/agile/1.0/board/{board_id}/configuration"),
+        )
+
+    def get_sprint(self, sprint_id: int) -> Sprint:
+        """Fetch one sprint; sprints from other boards fail closed."""
+        if sprint_id <= 0:
+            raise JiraApiError("sprint_id must be a positive integer")
+        sprint = self._parse_response(
+            Sprint.from_api, self._request("GET", f"/rest/agile/1.0/sprint/{sprint_id}")
+        )
+        self._scope.assert_sprint(sprint)
+        return sprint
+
+    def iter_board_sprints(
+        self,
+        board_id: int,
+        *,
+        states: Sequence[str] = (),
+        max_results_per_page: int = 50,
+        max_pages: int = 20,
+    ) -> Iterator[Sprint]:
+        """Iterate the board's sprints (agile API), following startAt pagination.
+
+        Every returned sprint is verified to originate from the configured board,
+        so a board filter spanning other boards cannot leak sprints into results.
+        """
+        self._check_board_scope(board_id)
+        invalid_states = set(states) - set(_SPRINT_STATES)
+        if invalid_states:
+            raise JiraApiError(
+                f"Invalid sprint states {sorted(invalid_states)}; "
+                f"valid states are {list(_SPRINT_STATES)}"
+            )
+        start_at = 0
+        for _ in range(max_pages):
+            params: dict[str, Any] = {
+                "startAt": start_at,
+                "maxResults": max_results_per_page,
+            }
+            if states:
+                params["state"] = ",".join(states)
+            payload = self._request(
+                "GET", f"/rest/agile/1.0/board/{board_id}/sprint", params=params
+            )
+            values = payload.get("values")
+            is_last = payload.get("isLast")
+            if not isinstance(values, list) or not isinstance(is_last, bool):
+                raise JiraApiError("Jira returned an invalid sprint page")
+            for item in values:
+                sprint = self._parse_response(Sprint.from_api, item)
+                self._scope.assert_sprint(sprint)
+                yield sprint
+            if is_last:
+                return
+            if not values:
+                raise JiraApiError("Jira returned an incomplete sprint page without values")
+            start_at += len(values)
+        raise JiraApiError(
+            f"Sprint listing exceeded {max_pages} pages; narrow the states or raise the limit"
         )
 
     def _scoped_jql(self, jql: str) -> str:

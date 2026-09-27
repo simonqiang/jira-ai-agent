@@ -6,9 +6,12 @@ sprint reports and preparing clear Jira tickets. Design and weekly roadmap:
 - [Product requirements and architecture](docs/superpowers/specs/2026-09-27-scrum-master-agent-design.md)
 - [Weekly implementation roadmap](docs/superpowers/plans/2026-09-27-weekly-delivery-roadmap.md)
 
-Status: **Week 1 — Jira foundation verified; acceptance evidence incomplete**. Live
-issue and board reads work for board 23031; anonymized examples and the report baseline
-are still pending. See the [Week 1 verification note](docs/superpowers/notes/2026-09-27-week-1.md).
+Status: **Week 2 — typed search implemented; live demo pending**. Week 1's live issue
+and board reads work for board 23031 (anonymized examples and the report baseline still
+pending). Week 2 adds sprint selection, typed filters, centralized pilot-scope checks
+and a checked query set — verified against mocked Jira; see the
+[Week 2 note](docs/superpowers/notes/2026-09-27-week-2.md) and the
+[Week 1 note](docs/superpowers/notes/2026-09-27-week-1.md).
 
 The intended runtime is a **local PC application**. Google Cloud deployment, public
 webhooks and a hosted collector are not required. Google ADK may call a configured
@@ -93,8 +96,34 @@ Exit 1 means Jira/network or unsupported-board failure; exit 2 means invalid set
 
 Issue reads and returned search results are restricted to the pilot project; board
 reads are restricted to the configured board ID. The low-level Week 1 search helper
-accepts JQL predicates only (no `ORDER BY`). Typed filtering, sorting and more complete
-search behavior belong to Week 2; there is no ADK agent or write capability yet.
+accepts JQL predicates only (no `ORDER BY`). There is no ADK agent or write
+capability yet.
+
+### Search (Week 2)
+
+```bash
+python -m scrum_agent sprints                      # sprint selection: id, name, state
+python -m scrum_agent sprints --state active
+python -m scrum_agent search --sprint "Payments R2" --type Bug --unresolved
+python -m scrum_agent search --sprint 78 --status "In Progress" --label payments
+python -m scrum_agent search --assignee Unassigned --label export
+python -m scrum_agent search --issue PAY-1          # single issue-key lookup
+```
+
+Filters are typed (`--status`, `--type`, `--assignee`, `--label`, `--unresolved`,
+`--sprint`) and compiled to quoted, project-scoped JQL — no raw JQL input. A sprint
+reference accepts an ID, an exact name or a unique substring; an ambiguous name
+lists the candidates and exits 1 instead of guessing. An accurate zero is reported
+as `No issues match the query (checked: 0 issues).` with exit 0 — never as silence
+or an error. Search output omits assignee names; anonymize summaries and links
+before recording evidence.
+
+All scope decisions (project, board, sprint origin) are centralized in
+`src/scrum_agent/auth` (`PilotScope`); every read path — client, search service and
+the Week 3+ agent — must route through it, and out-of-scope data fails closed. The
+Week 2 exit checks live in `tests/checked_queries.py` (empty results, ambiguous
+sprint names, multi-page collection, cross-project/cross-board leakage); Week 3's
+agent must answer the same set.
 
 ## Layout
 
@@ -102,10 +131,15 @@ search behavior belong to Week 2; there is no ADK agent or write capability yet.
 src/scrum_agent/         application package
   config.py              validated settings (secrets from env)
   app.py                 CLI entry point (`python -m scrum_agent`)
-  jira/client.py         typed Jira Cloud client (REST v3 + board APIs)
+  auth/scope.py          centralized pilot-scope access checks (Week 2)
+  jira/client.py         typed Jira Cloud client (REST v3 + board/sprint APIs)
   jira/models.py         immutable read models
   jira/errors.py         typed errors (auth/permission/not-found/rate-limit)
+  search/filters.py      typed filters compiled to quoted, project-scoped JQL
+  search/service.py      issue lookup, sprint selection and search results
+  search/errors.py       ambiguity/not-found errors that prompt, not guess
 tests/                   unit tests against a mocked transport
+tests/checked_queries.py the Week 2 checked query set + fixture Jira server
 docs/decisions/          decision records (authentication, metric policy)
 docs/samples/            anonymized ticket-example and baseline templates
 .github/workflows/       CI: lint, tests, secret scan

@@ -108,3 +108,160 @@ def test_probe_accepts_boards_without_an_estimate_field(
     )
     assert app.main([]) == 0
     assert f"estimation={estimation_type}" in capsys.readouterr().out
+
+
+# -- search and sprints (Week 2) ------------------------------------------------
+
+SPRINTS_PAYLOAD = {
+    "maxResults": 50,
+    "startAt": 0,
+    "isLast": True,
+    "total": 2,
+    "values": [
+        {"id": 77, "name": "Payments R1", "state": "closed", "originBoardId": 42},
+        {"id": 78, "name": "Payments R2", "state": "active", "originBoardId": 42},
+    ],
+}
+
+SEARCH_BUG_PAGE = {
+    "issues": [
+        {
+            "id": "10001",
+            "key": "PAY-1",
+            "fields": {
+                "summary": "Double charge on checkout retry",
+                "status": {"name": "In Progress"},
+                "issuetype": {"name": "Bug"},
+                "assignee": {"displayName": "A. Developer"},
+                "updated": "2026-09-27T08:00:00.000+0000",
+            },
+        }
+    ],
+    "isLast": True,
+}
+
+
+def install_search(monkeypatch: pytest.MonkeyPatch, handler) -> None:
+    monkeypatch.setattr(app, "Settings", make_settings)
+    monkeypatch.setattr(
+        app,
+        "JiraClient",
+        lambda settings: JiraClient(
+            settings,
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+
+
+def search_handler(
+    *,
+    sprint_listing: dict = SPRINTS_PAYLOAD,
+    search_page: dict = SEARCH_BUG_PAGE,
+    seen_params: dict | None = None,
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/board/42/sprint"):
+            if seen_params is not None:
+                seen_params.update(request.url.params)
+            return httpx.Response(200, json=sprint_listing)
+        if path.endswith("/sprint/78"):
+            return httpx.Response(
+                200,
+                json={"id": 78, "name": "Payments R2", "state": "active", "originBoardId": 42},
+            )
+        if path == "/rest/api/3/search/jql":
+            return httpx.Response(200, json=search_page)
+        assert path.endswith("/issue/PAY-1")
+        return httpx.Response(200, json=ISSUE_PAYLOAD)
+
+    return handler
+
+
+def test_search_finds_unresolved_bugs_in_the_selected_sprint(monkeypatch, capsys) -> None:
+    install_search(monkeypatch, search_handler())
+    exit_code = app.main(["search", "--sprint", "Payments R2", "--type", "Bug", "--unresolved"])
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "PAY-1" in output
+    assert "Double charge on checkout retry" in output
+    assert "https://test.atlassian.net/browse/PAY-1" in output
+    assert "Sprint: 78 Payments R2 [active]" in output
+    assert "resolution IS EMPTY" in output
+    assert "1 issue(s)." in output
+    assert "A. Developer" not in output
+
+
+def test_search_reports_zero_results_accurately(monkeypatch, capsys) -> None:
+    install_search(monkeypatch, search_handler(search_page={"issues": [], "isLast": True}))
+    assert app.main(["search", "--sprint", "78", "--type", "Epic"]) == 0
+    output = capsys.readouterr().out
+    assert "No issues match the query (checked: 0 issues)." in output
+
+
+def test_search_ambiguous_sprint_lists_candidates_without_traceback(monkeypatch, capsys) -> None:
+    duplicated = {
+        **SPRINTS_PAYLOAD,
+        "values": [
+            {"id": 77, "name": "Payments", "state": "closed", "originBoardId": 42},
+            {"id": 78, "name": "Payments", "state": "active", "originBoardId": 42},
+        ],
+    }
+    install_search(monkeypatch, search_handler(sprint_listing=duplicated))
+    assert app.main(["search", "--sprint", "Payments", "--unresolved"]) == 1
+    captured = capsys.readouterr()
+    assert "77: Payments [closed]" in captured.err
+    assert "78: Payments [active]" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_search_by_issue_key(monkeypatch, capsys) -> None:
+    install_search(monkeypatch, search_handler())
+    assert app.main(["search", "--issue", "PAY-1"]) == 0
+    output = capsys.readouterr().out
+    assert "PAY-1" in output
+    assert "https://test.atlassian.net/browse/PAY-1" in output
+
+
+def test_search_requires_issue_or_a_filter(monkeypatch, capsys) -> None:
+    install_search(monkeypatch, search_handler())
+    assert app.main(["search"]) == 2
+    assert "at least one filter" in capsys.readouterr().err
+
+
+def test_search_rejects_issue_combined_with_filters(monkeypatch, capsys) -> None:
+    install_search(monkeypatch, search_handler())
+    assert app.main(["search", "--issue", "PAY-1", "--unresolved"]) == 2
+    assert "not both" in capsys.readouterr().err
+
+
+def test_search_blank_filter_value_is_an_input_error(monkeypatch, capsys) -> None:
+    install_search(monkeypatch, search_handler())
+    assert app.main(["search", "--status", "  "]) == 2
+    captured = capsys.readouterr()
+    assert "Invalid search input" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_sprints_command_lists_sprints(monkeypatch, capsys) -> None:
+    seen: dict = {}
+    install_search(monkeypatch, search_handler(seen_params=seen))
+    assert app.main(["sprints"]) == 0
+    output = capsys.readouterr().out
+    assert "77: Payments R1 [closed]" in output
+    assert "78: Payments R2 [active]" in output
+    assert "2 sprint(s)." in output
+    assert "state" not in seen  # no state filter by default
+
+
+def test_sprints_command_filters_by_state(monkeypatch, capsys) -> None:
+    seen: dict = {}
+    install_search(monkeypatch, search_handler(seen_params=seen))
+    assert app.main(["sprints", "--state", "active,closed"]) == 0
+    assert seen["state"] == "active,closed"
+
+
+def test_sprints_command_rejects_invalid_states(monkeypatch, capsys) -> None:
+    install_search(monkeypatch, search_handler())
+    assert app.main(["sprints", "--state", "deleted"]) == 1
+    assert "Jira error" in capsys.readouterr().err
