@@ -4,7 +4,7 @@
 
 **Goal:** Deliver a personal Scrum Master assistant through weekly increments that provide Jira search, reliable sprint reports, standards-based ticket drafting and approved writes, then semantic search.
 
-**Architecture:** One Google ADK agent calls typed Python services for Jira search, reporting and ticket preparation. PostgreSQL stores history, approvals and later vectors; server-side authorization applies to every data path. Start with one user and one Scrum board, then add shared-team operation as a separate extension. The pilot deploys a simplified topology — one Cloud Run service, Cloud Scheduler-driven idempotent reconciliation instead of Cloud Tasks, direct webhook ingestion with deduplication — while keeping module boundaries so the shared-team split is a deployment change, not a rewrite.
+**Architecture:** One Google ADK agent calls typed Python services for Jira search, reporting and ticket preparation. PostgreSQL stores history, approvals and later vectors; server-side authorization applies to every data path. Start with one user and one Scrum board, then add shared-team operation as a separate extension. The pilot deploys a simplified topology — one Cloud Run service, Cloud Scheduler-driven idempotent reconciliation, webhook ingestion only where the Week 1 authentication choice supports it (otherwise scheduled polling), and a Cloud Tasks queue added in Week 5 for durable report jobs — while keeping module boundaries so the shared-team split is a deployment change, not a rewrite.
 
 **Tech Stack:** Python, Google ADK, Gemini, FastAPI, PostgreSQL/pgvector, a server-rendered HTML interface (Jinja/HTMX; a React SPA is deferred to the shared-team phase), and Google Cloud hosting for the unattended collector and pilot.
 
@@ -238,7 +238,7 @@ These are future paths to guide implementation; this planning task does not crea
 
 **Weekly goal:** “I can use the integrated assistant for a working week and judge its practical value.”
 
-- [ ] Deploy the integrated personal app behind authentication and a single-user allowlist, with the persistent sessions running since Week 4. Keep secrets outside the app image and configure cost/error visibility.
+- [ ] Deploy the integrated personal app behind authentication and a single-user allowlist, with persistent sessions already enabled (Week 4, or the contingency buffer if Week 4 deferred them). Keep secrets outside the app image and configure cost/error visibility.
 - [ ] Run search, reporting, drafting, creation and update scenarios; rerun permission, approval, model-behavior and export-injection checks against the pinned release configuration.
 - [ ] Re-verify backup/restore and failure recovery (first exercised in Week 8) against the deployed configuration; document setup and operating steps.
 - [ ] Use the app during a working week, record defects and report-preparation time, and prioritize the next backlog from observed friction.

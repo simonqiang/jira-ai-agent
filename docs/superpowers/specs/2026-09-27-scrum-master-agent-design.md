@@ -1,7 +1,7 @@
 # Scrum Master Jira Assistant — product requirements and architecture
 
 Status: design reviewed; revisions from the 2026-09-27 review applied. No application implementation or deployment yet.
-Date: 2026-09-27. Revision summary: pilot topology, export sanitization, asynchronous reports, create correlation markers, batched permission rechecks, changelog-driven history, cost baseline, pilot configuration mechanics.
+Date: 2026-09-27. Revision summary (three review rounds): pilot topology, export sanitization, asynchronous reports with durable Cloud Tasks execution, create correlation markers, batched permission rechecks, changelog-driven history, measured cost parameters, pilot configuration mechanics, authentication-dependent webhook branches, scoped-token facts, Week 4 load relief.
 
 ## 1. Product brief
 
@@ -91,7 +91,7 @@ If history cannot establish original commitment, return the available status sum
 
 Build a modular Python application deployed on Cloud Run, with a separate background worker deployment from the same codebase. Start with one ADK conversational agent and typed domain tools. Search, reporting and ticket workflows are separate modules; introduce specialist agents only if evaluation shows a benefit. ADK supports both simple agents and larger workflows; see [agent architecture](https://google.github.io/adk-docs/agents/) and [function tools](https://google.github.io/adk-docs/tools-custom/function-tools/).
 
-The diagram below is the target architecture. Pilot topology: one Cloud Run service (API, worker and agent in the same deployment), Cloud Scheduler calling an idempotent reconciliation endpoint, webhook ingestion as direct HTTP with deduplication (scheduled reconciliation already tolerates missed events), and a server-rendered HTML interface instead of the React application. Asynchronous report jobs (from Week 5) need durable execution after the request ends or an instance restarts, which an in-process task cannot guarantee: add a Cloud Tasks queue targeting the same Cloud Run service, persist job state in PostgreSQL, and make execution idempotent and retry-safe. A 15-minute reconciliation schedule cannot serve the sub-minute report target. A separate worker deployment and the SPA remain shared-team-phase additions. The single-service pilot must still keep the module boundaries above so the later split is a deployment change, not a rewrite.
+The diagram below is the target architecture. Pilot topology: one Cloud Run service (API, worker and agent in the same deployment), Cloud Scheduler calling an idempotent reconciliation endpoint, webhook ingestion as direct HTTP with deduplication where the Week 1 authentication choice supports webhooks (scheduled polling is the fallback, and reconciliation already tolerates missed events), and a server-rendered HTML interface instead of the React application. Asynchronous report jobs (from Week 5) need durable execution after the request ends or an instance restarts, which an in-process task cannot guarantee: add a Cloud Tasks queue targeting the same Cloud Run service, persist job state in PostgreSQL, and make execution idempotent and retry-safe. A 15-minute reconciliation schedule cannot serve the sub-minute report target. A separate worker deployment and the SPA remain shared-team-phase additions. The single-service pilot must still keep the module boundaries above so the later split is a deployment change, not a rewrite.
 
 ```mermaid
 flowchart TD
