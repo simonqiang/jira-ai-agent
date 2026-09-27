@@ -4,9 +4,9 @@
 
 **Goal:** Deliver a personal Scrum Master assistant through weekly increments that provide Jira search, reliable sprint reports, standards-based ticket drafting and approved writes, then semantic search.
 
-**Architecture:** One Google ADK agent calls typed Python services for Jira search, reporting and ticket preparation. PostgreSQL stores history, approvals and later vectors; server-side authorization applies to every data path. Start with one user and one Scrum board, then add shared-team operation as a separate extension.
+**Architecture:** One Google ADK agent calls typed Python services for Jira search, reporting and ticket preparation. PostgreSQL stores history, approvals and later vectors; server-side authorization applies to every data path. Start with one user and one Scrum board, then add shared-team operation as a separate extension. The pilot deploys a simplified topology — one Cloud Run service, Cloud Scheduler-driven idempotent reconciliation instead of Cloud Tasks, direct webhook ingestion with deduplication — while keeping module boundaries so the shared-team split is a deployment change, not a rewrite.
 
-**Tech Stack:** Python, Google ADK, Gemini, FastAPI, PostgreSQL/pgvector, a small React interface, and Google Cloud hosting for the unattended collector and pilot.
+**Tech Stack:** Python, Google ADK, Gemini, FastAPI, PostgreSQL/pgvector, a server-rendered HTML interface (Jinja/HTMX; a React SPA is deferred to the shared-team phase), and Google Cloud hosting for the unattended collector and pilot.
 
 **Spec:** [Product requirements and architecture](../specs/2026-09-27-scrum-master-agent-design.md). The preceding design review identified reporting, synchronization, permission and evaluation gaps; their resolution is assigned below.
 
@@ -42,6 +42,10 @@ No phase includes bulk writes, issue deletion, sprint administration, autonomous
 | Revoked access remains visible in history, exports or model context | Week 2 establishes checks; Weeks 3, 5 and 10 exercise chat, report and retrieval paths. |
 | Board filters span projects or project types differ | Week 1 records supported configuration; Week 2 tests the actual board scope. |
 | No-match queries or missing ticket details cause invented answers | Week 3 checks abstention; Week 7 checks questions instead of invented requirements; Week 12 reruns both. |
+| Untrusted issue text is injected into exports or rendered reports (spreadsheet formulas, markup) | Week 5 sanitizes and tests exports; Week 12 reruns the checks. |
+| Report generation blocks the conversation and times out | Week 5 makes report generation asynchronous with a job handle and status tool. |
+| A timed-out create leaves an unknown duplicate ticket | Week 8 writes a correlation marker and reconciles by search before declaring unknown. |
+| Collector credentials expire silently | Week 1 records the token-versus-3LO decision; Week 4 monitors credential expiry as a collection-freshness alarm. |
 
 ## Phase overview
 
@@ -67,7 +71,7 @@ These are future paths to guide implementation; this planning task does not crea
 | `src/scrum_agent/reports/` | Metric inputs, calculations, report narrative and exports | Weeks 5–6 |
 | `src/scrum_agent/tickets/`, `templates/` | Versioned team policy, draft validation, previews and execution | Weeks 7–9 |
 | `src/scrum_agent/retrieval/` | Chunking, embeddings, hybrid retrieval and citations | Weeks 10–11 |
-| `web/` | Small authenticated UI: search, reports, drafts and approvals | Week 3 onward |
+| `web/` | Small authenticated server-rendered UI (Jinja/HTMX): search, reports, drafts and approvals | Week 3 onward |
 | `tests/`, `evals/` | Behavioral tests and representative user tasks, grouped by feature | Every implementation week |
 
 ## Week 1 — Establish a working Jira foundation
@@ -75,7 +79,9 @@ These are future paths to guide implementation; this planning task does not crea
 **Weekly goal:** “I can run the project and retrieve a known ticket and my board configuration.”
 
 - [ ] Confirm Jira deployment, personal-pilot scope, board type, project scope, estimate field, timezone and permitted Google Cloud region/budget. If Data Center is selected, revise the adapter plan before continuing.
-- [ ] Collect three representative ticket examples and one manually prepared sprint report; record current report preparation time as a baseline.
+- [ ] Decide pilot authentication: API token with expiry monitoring, or OAuth 3LO from the start (the shared-team phase requires 3LO; building it early avoids a collector migration).
+- [ ] Collect three representative ticket examples and one manually prepared sprint report; record current report preparation time as a baseline. Anonymize the examples before they become fixtures.
+- [ ] Set up minimal CI (lint and tests) and pre-commit secret scanning; no credential ever enters source control.
 - [ ] Set up the Python application, configuration and a typed Jira connection; fetch one known issue and board metadata without exposing credentials.
 - [ ] Write a metric-policy decision record: use “initial planned scope”; distinguish done-by-end from completed-during-sprint; define pre-closure state, rollover and human-confirmed Sprint Goal outcome. Update the source specification with these decisions.
 
@@ -116,7 +122,8 @@ These are future paths to guide implementation; this planning task does not crea
 **Weekly goal:** “My sprint data continues to be collected when my laptop is off.”
 
 - [ ] Add PostgreSQL migrations for snapshots, issue events, board configuration and ingestion checkpoints.
-- [ ] Deploy a minimal private collector on the approved cloud setup; implement scheduled reconciliation and relevant webhook ingestion where supported. Include webhook renewal if dynamic subscriptions are used.
+- [ ] Deploy a minimal private collector on the approved cloud setup: one Cloud Run service plus a Cloud Scheduler idempotent reconciliation endpoint (Cloud Tasks is deferred to the shared-team phase). Implement webhook ingestion with a secret-bearing callback URL, treated as hints only; include webhook renewal if dynamic subscriptions are used.
+- [ ] Monitor credential expiry: an expiring or expired token must surface as a collection-freshness alarm, not as silent gaps in history.
 - [ ] Deduplicate events, checkpoint all-page ingestion and recover from interruption. Treat webhook events as hints and reconcile against authoritative data.
 - [ ] Record sync freshness, gaps and configuration versions. Set an initial target of a successful reconciliation every 15 minutes; represent this as collection freshness, not proof that Jira indexing has no lag.
 
@@ -132,18 +139,19 @@ These are future paths to guide implementation; this planning task does not crea
 
 - [ ] Calculate current scope, status counts, configured estimates and explicit blockers in Python/SQL using a persisted set of report inputs.
 - [ ] Generate a short narrative with issue references, Sprint Goal, impediments and decisions needed. Goal achievement stays human-confirmed or unknown.
-- [ ] Add report selection/view and Markdown/CSV export, including freshness, estimate coverage and completeness labels.
+- [ ] Add report selection/view and Markdown/CSV export, including freshness, estimate coverage and completeness labels. Sanitize CSV cells beginning with `=`, `+`, `-` or `@` and escape rendered markup.
+- [ ] Make report generation asynchronous: `build_sprint_report` returns a job handle with an estimate and a `get_report` tool reports status and results; no blocking tool call in the conversation loop.
 - [ ] Revalidate access for every contributing issue before generation/export; check historical/cache paths as well as live search. Exclude unauthorized data from both details and totals.
 
 **Friday demo:** Generate a report for your board, verify totals manually and export the same authorized result.
 
-**Done when:** Current-state numbers match a checked dataset; exported totals match the UI; revoked access does not reappear in context or reports. Historical metrics without sufficient inputs remain unavailable.
+**Done when:** Current-state numbers match a checked dataset; exported totals match the UI; exports resist formula and markup injection; revoked access does not reappear in context or reports. Historical metrics without sufficient inputs remain unavailable.
 
 ## Week 6 — Make historical sprint reports trustworthy
 
 **Weekly goal:** “I can explain what happened during a closed sprint, with evidence for the calculations.”
 
-- [ ] Implement the Week 1 metric policy using snapshots and ordered changelog events: initial scope, additions/removals, estimate changes, completion and rollover.
+- [ ] Implement the Week 1 metric policy using ordered changelog events as the primary source (membership, status and estimate changes live in issue history), with snapshots as cross-checks and for board configuration: initial scope, additions/removals, estimate changes, completion and rollover.
 - [ ] Check done-before-start, reopening, missing estimates, parent/subtask rules, cross-project scope, timezone boundaries and ambiguous closure ordering.
 - [ ] Finalize a report only when relevant ingestion has reconciled and required historical evidence is present; retain immutable metric inputs and policy version. Otherwise return a provisional/partial report with specific missing evidence.
 - [ ] Compare one suitable closed sprint with a manually checked report; document intentional differences from Jira. Add same-board velocity trends only for sufficiently supported sprints.
@@ -158,7 +166,7 @@ These are future paths to guide implementation; this planning task does not crea
 
 **Weekly goal:** “I can turn a rough request into a useful Story, Bug or Task draft.”
 
-- [ ] Add versioned templates based on the Week 1 examples and project/type field metadata.
+- [ ] Add versioned templates based on the Week 1 examples and project/type field metadata. Store them as versioned YAML in the repository with the version recorded at load time; no administrative UI in the pilot.
 - [ ] Generate editable drafts with context, scope, acceptance criteria, dependencies and open questions appropriate to the issue type.
 - [ ] Separate required Jira fields, mandatory team policy and advisory writing suggestions. Retrieve mandatory templates by exact identity/version.
 - [ ] Review at least two examples of each issue type, including incomplete input; require questions instead of invented business rules, estimates or bug evidence.
@@ -174,7 +182,7 @@ These are future paths to guide implementation; this planning task does not crea
 - [ ] Persist drafts, payload hashes, approval identity/expiry and execution records; provide a preview and authenticated approval action.
 - [ ] Revalidate Jira permissions and field metadata before creating one issue; verify the created issue and return its link.
 - [ ] Invalidate approval after draft edits. Check duplicate clicks, expired approval and application restart.
-- [ ] Handle ambiguous create timeouts as an unknown outcome with reconciliation; do not automatically retry a potentially successful create.
+- [ ] Handle ambiguous create timeouts: write a unique correlation marker (label or description footer) with every create, reconcile by searching for it, and mark the outcome unknown only when the marker cannot be found. Never automatically retry a potentially successful create.
 
 **Friday demo:** Approve a sandbox draft, create it once and inspect the actual Jira fields and audit record.
 
@@ -199,9 +207,9 @@ These are future paths to guide implementation; this planning task does not crea
 
 **Weekly goal:** “I can find related tickets even when they use different wording.”
 
-- [ ] Enable pgvector and index authorized descriptions plus approved examples; record source revision, content hash and embedding model/configuration.
+- [ ] Enable pgvector and index authorized descriptions plus approved examples; record source revision, content hash and embedding model/configuration. Chunk Atlassian Document Format content by document nodes and index the summary as a separate chunk.
 - [ ] Combine metadata-filtered vector retrieval with full-text retrieval; deduplicate issue results.
-- [ ] Recheck current source access and revision before any retrieved text reaches the model; invalidate obsolete/deleted chunks.
+- [ ] Recheck current source access and revision before any retrieved text reaches the model, batching the access check into one user-scoped JQL query; invalidate obsolete/deleted chunks.
 - [ ] Evaluate paraphrases, exact identifiers, no-match requests, stale content and revoked-access cases against the structured-search baseline.
 
 **Friday demo:** Find related retry/payment issues from a differently worded query and open the cited sources.
@@ -226,7 +234,7 @@ These are future paths to guide implementation; this planning task does not crea
 **Weekly goal:** “I can use the integrated assistant for a working week and judge its practical value.”
 
 - [ ] Deploy the integrated personal app behind authentication and a single-user allowlist; add persistent sessions with source/access checks. Keep secrets outside the app image and configure cost/error visibility.
-- [ ] Run search, reporting, drafting, creation and update scenarios; rerun permission, approval and model-behavior checks against the pinned release configuration.
+- [ ] Run search, reporting, drafting, creation and update scenarios; rerun permission, approval, model-behavior and export-injection checks against the pinned release configuration.
 - [ ] Exercise backup/restore and failure recovery for the application records needed to avoid lost approvals or duplicated writes; document setup and operating steps.
 - [ ] Use the app during a working week, record defects and report-preparation time, and prioritize the next backlog from observed friction.
 
