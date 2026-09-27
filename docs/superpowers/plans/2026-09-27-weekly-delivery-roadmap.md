@@ -47,6 +47,7 @@ No phase includes bulk writes, issue deletion, sprint administration, autonomous
 | Report generation blocks the conversation and times out | Week 5 makes report generation asynchronous with a job handle and status tool. |
 | A timed-out create leaves an unknown duplicate ticket | Week 8 writes a correlation marker and reconciles by search before declaring unknown. |
 | Collector credentials expire silently | Week 1 records the token-versus-3LO decision; Week 4 monitors credential expiry as a collection-freshness alarm. |
+| Webhook setup presumes an authentication method the pilot may not use | Week 1's decision selects the Week 4 webhook branch; scheduled polling with stated limitations is the fallback. |
 
 ## Phase overview
 
@@ -124,8 +125,8 @@ These are future paths to guide implementation; this planning task does not crea
 **Weekly goal:** “My sprint data continues to be collected when my laptop is off.”
 
 - [ ] Add PostgreSQL migrations for snapshots, issue events, board configuration and ingestion checkpoints.
-- [ ] Enable persistent ADK sessions on PostgreSQL (DatabaseSessionService, user-isolated) now rather than retrofitting them in Week 12, and enable automated backups when the database is introduced.
-- [ ] Deploy a minimal private collector on the approved cloud setup: one Cloud Run service plus a Cloud Scheduler idempotent reconciliation endpoint; the Cloud Tasks queue arrives in Week 5 when asynchronous reports need it. Implement webhook ingestion using the registration method's documented authentication — dynamically registered OAuth 2.0 app webhooks with signed JWT bearer validation are the default — and give the webhook endpoint authenticated public ingress while scheduler, application and write endpoints keep separate access controls. Webhooks are hints only; include webhook renewal if dynamic subscriptions are used.
+- [ ] Enable automated backups when the database is introduced. Persistent ADK sessions (DatabaseSessionService, user-isolated) are also due here, but they are this week's first deferrable item: if the week runs long, keep Week 3's short-lived conversations and move sessions into the contingency buffer rather than compressing collection reliability.
+- [ ] Deploy a minimal private collector on the approved cloud setup: one Cloud Run service plus a Cloud Scheduler idempotent reconciliation endpoint; the Cloud Tasks queue arrives in Week 5 when asynchronous reports need it. Implement webhook ingestion per the Week 1 authentication choice — OAuth-app webhooks with signed JWT bearer validation under 3LO; administrator-configured webhooks with `X-Hub-Signature` HMAC validation for a token pilot with admin rights; otherwise scheduled polling only, with stated history limitations — and give the webhook endpoint authenticated public ingress while scheduler, application and write endpoints keep separate access controls. Webhooks are hints only; include webhook renewal if dynamic subscriptions are used.
 - [ ] Monitor credential expiry: an expiring or expired token must surface as a collection-freshness alarm, not as silent gaps in history.
 - [ ] Deduplicate events, checkpoint all-page ingestion and recover from interruption. Treat webhook events as hints and reconcile against authoritative data.
 - [ ] Record sync freshness, gaps and configuration versions. Set an initial target of a successful reconciliation every 15 minutes; represent this as collection freshness, not proof that Jira indexing has no lag.
@@ -134,7 +135,7 @@ These are future paths to guide implementation; this planning task does not crea
 
 **Done when:** Collection runs unattended for 48 hours, replayed events do not duplicate history, outages are visible and the recovery path has been exercised.
 
-**Scope rule:** Keep the hosted surface to the collector and required endpoints. A missed snapshot must create a completeness warning. If cloud access is delayed, use an approved always-on host or extend this week; laptop-only collection cannot meet this goal.
+**Scope rule:** Keep the hosted surface to the collector and required endpoints. The essential outcome is reliable unattended collection; every other task added this week defers to it, persistent sessions first. A missed snapshot must create a completeness warning. If cloud access is delayed, use an approved always-on host or extend this week; laptop-only collection cannot meet this goal.
 
 ## Week 5 — Generate a useful current-sprint report
 
@@ -143,7 +144,7 @@ These are future paths to guide implementation; this planning task does not crea
 - [ ] Calculate current scope, status counts, configured estimates and explicit blockers in Python/SQL using a persisted set of report inputs.
 - [ ] Generate a short narrative with issue references, Sprint Goal, impediments and decisions needed. Goal achievement stays human-confirmed or unknown.
 - [ ] Add report selection/view and Markdown/CSV export, including freshness, estimate coverage and completeness labels. Sanitize CSV cells beginning with `=`, `+`, `-` or `@` and escape rendered markup.
-- [ ] Make report generation asynchronous: `build_sprint_report` returns a job handle with an estimate and a `get_report` tool reports status and results; no blocking tool call in the conversation loop. Execute jobs durably with a Cloud Tasks queue targeting the same Cloud Run service: persist job state in PostgreSQL, make execution idempotent and retry-safe, and verify a job survives an instance restart.
+- [ ] Make report generation asynchronous: `build_sprint_report` returns a job handle with an estimate and a `get_report` tool reports status and results; no blocking tool call in the conversation loop. Execute jobs durably with a Cloud Tasks queue targeting the same Cloud Run service: persist job state in PostgreSQL, and enforce idempotency in the application through persisted job identity and execution state. Verify both an instance restart and a duplicate delivery — Cloud Tasks is at-least-once.
 - [ ] Revalidate access for every contributing issue before generation/export; check historical/cache paths as well as live search. Exclude unauthorized data from both details and totals.
 
 **Friday demo:** Generate a report for your board, verify totals manually and export the same authorized result.
