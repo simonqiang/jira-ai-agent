@@ -11,6 +11,7 @@ _DUMMY = {
     "jira_user_email": "sm@test.example",
     "jira_api_token": "tok-test-123",
     "jira_auth_mode": "basic_site",
+    "jira_project_key": "PAY",
     "jira_board_id": 42,
     "known_issue_key": "PAY-1",
 }

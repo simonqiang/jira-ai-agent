@@ -150,13 +150,23 @@ def test_search_jql_follows_next_page_token() -> None:
         return ok(pages[len(calls) - 1])
 
     client, _ = make_client(handler)
-    issues = list(client.iter_search_jql("project = PAY"))
+    issues = list(client.iter_search_jql("assignee = currentUser()"))
 
     assert [issue.key for issue in issues] == ["PAY-1", "PAY-2", "PAY-3"]
     assert len(calls) == 2
-    assert calls[0]["jql"] == "project = PAY"
+    assert calls[0]["jql"] == "project = PAY AND (assignee = currentUser())"
     assert "nextPageToken" not in calls[0]
     assert calls[1]["nextPageToken"] == "token-2"
+
+
+def test_search_jql_always_scoped_to_configured_project() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return ok({"issues": []})
+
+    client, requests = make_client(handler)
+    list(client.iter_search_jql('text ~ "billing" OR key = PAY-9'))
+    body = json.loads(requests[0].content)
+    assert body["jql"] == 'project = PAY AND (text ~ "billing" OR key = PAY-9)'
 
 
 def test_search_jql_enforces_page_limit() -> None:

@@ -36,12 +36,18 @@ class Settings(BaseSettings):
     jira_api_token: SecretStr
     jira_auth_mode: str = AuthMode.BASIC_SITE
     jira_cloud_id: str | None = None
+    jira_project_key: str = Field(min_length=1)
     jira_board_id: int = Field(gt=0)
     known_issue_key: str = Field(min_length=1)
     report_timezone: str = "Asia/Hong_Kong"
 
     @field_validator(
-        "jira_site", "jira_user_email", "jira_auth_mode", "known_issue_key", mode="before"
+        "jira_site",
+        "jira_user_email",
+        "jira_auth_mode",
+        "known_issue_key",
+        "jira_project_key",
+        mode="before",
     )
     @classmethod
     def _strip_strings(cls, value: object) -> object:

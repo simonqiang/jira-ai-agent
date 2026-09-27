@@ -22,8 +22,10 @@ reports (Week 5) are built on them.
 
 ## Remaining Week 1 inputs (owner: pilot user)
 
-- Board ID, project key and board type for the supported board.
-- Estimate field (story points vs. custom field) once the board is selected.
+- ~~Project key~~ confirmed: **GACD** (hard-scoped in every search). Board 31347 must
+  still be verified as a GACD board once the granular board/sprint token scopes are
+  granted.
+- Estimate field (story points vs. custom field) once the board is reachable.
 - Three anonymized ticket examples and one sprint-report baseline (`docs/samples/`).
 - Monthly budget figure (informed by the Week 3 model-call measurements).
 
@@ -37,10 +39,14 @@ Verified against `dhl.atlassian.net` with a scoped personal token:
 - cloudId for this site: recorded in `.env` (not in source control).
 - Issue reads and JQL search work with the current scopes (a bounded JQL is required:
   unbounded queries are rejected with 400).
-- The Jira Software **board API returns 401 "scope does not match"** — the token was
-  created without board/sprint read scopes. Recreate the token adding board/sprint
-  read access (or the classic `read:jira-work` scope bundle) to complete Week 1's
-  board-configuration fetch.
+- **Classic `read:jira-work` does not cover the agile board API for scoped tokens.**
+  Board/sprint endpoints require additional granular read scopes (search "board" and
+  "sprint" under Granular type, Read action in the token scope picker); issue endpoints
+  work with classic `read:jira-work` alone. `myself` also needs a profile scope the
+  pilot token omits — not required by the application.
+- **Project scope confirmed: GACD.** `jira_project_key` is a required setting and every
+  search the client runs is hard-scoped with `project = GACD AND (...)`; board 31347
+  must be verified as a GACD board once board scope is granted.
 
 ## Consequences
 

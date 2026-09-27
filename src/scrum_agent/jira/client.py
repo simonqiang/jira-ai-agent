@@ -113,6 +113,11 @@ class JiraClient:
             self._request("GET", f"/rest/agile/1.0/board/{board_id}/configuration")
         )
 
+    def _scoped_jql(self, jql: str) -> str:
+        """Hard-scope every search to the configured pilot project (spec section 10:
+        indexing and queries are bounded to selected projects)."""
+        return f"project = {self._settings.jira_project_key} AND ({jql})"
+
     def iter_search_jql(
         self,
         jql: str,
@@ -120,11 +125,14 @@ class JiraClient:
         max_results_per_page: int = 50,
         max_pages: int = 20,
     ) -> Iterator[Issue]:
-        """Iterate issues matching JQL, following nextPageToken across all pages."""
+        """Iterate issues matching JQL, following nextPageToken across all pages.
+
+        The query is always restricted to the configured project, regardless of
+        what the caller passes."""
         token: str | None = None
         for _ in range(max_pages):
             body: dict[str, Any] = {
-                "jql": jql,
+                "jql": self._scoped_jql(jql),
                 "maxResults": max_results_per_page,
                 "fields": _SEARCH_FIELDS,
             }
