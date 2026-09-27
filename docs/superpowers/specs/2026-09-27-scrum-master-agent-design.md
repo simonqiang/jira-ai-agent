@@ -62,17 +62,20 @@ Every report records site, board ID, sprint ID, sprint goal, reporting timezone,
 
 The reporting service computes numbers in Python/SQL. The language model explains those computed results and cites evidence. It does not calculate totals from vector results or a sample of retrieved tickets.
 
-Proposed definitions, to be agreed with the team. The Week 1 metric-policy decision record supersedes this table: Week 1 must update these definitions to separate done-at-cutoff from completed-during-sprint and to define pre-closure and rollover handling, and that update is a Week 1 exit criterion. Until then this table is provisional:
+Definitions set by the Week 1 metric-policy decision record ([ADR-0002](../../decisions/0002-metric-policy.md)); the report record carries the metric-policy version, and changes require a new policy version:
 
 | Metric | Definition |
 |---|---|
-| Committed work | Unique in-scope issues assigned to the sprint at its start; sum estimates as recorded at that time. |
-| Delivered work | Unique issues in the sprint at cutoff that satisfy the configured board done rule at cutoff; display count and estimates at cutoff. |
-| Commitment completion | Committed issues delivered at cutoff divided by all committed issues. A point-based version uses start-time estimates in both numerator and denominator. Zero denominator is N/A. |
+| Committed work | Initial planned scope: unique issues in the sprint at its start, from changelog membership events; estimates as recorded at that time. Missing estimates are unknown, not zero. |
+| Completed during sprint | Issues that first entered a configured done state after sprint start and are in a done state at cutoff. Done-before-start is excluded. |
+| Done by end | Issues in a done state at cutoff, whenever entered. Reported separately from completed-during-sprint. |
+| Commitment completion | Committed issues completed during the sprint divided by all committed issues. A point-based version uses start-time estimates in numerator and denominator. Zero denominator is N/A. |
 | Scope changes | Membership additions and removals during the sprint, including timestamps and estimates at the event. Estimate changes are reported separately. |
-| Unfinished work | Issues still in sprint scope at cutoff that are not done. Distinguish unfinished original commitment from unfinished additions and removed commitment. |
+| Reopened work | Issues done during the sprint but not done at cutoff; excluded from completed-during-sprint, listed separately and counted as unfinished. |
+| Pre-closure state | Issue state immediately before sprint close (at the observation cutoff for active sprints); the basis for rollover classification and for separating unfinished original commitment, unfinished additions and removed commitment. |
+| Unfinished work | Issues still in sprint scope at cutoff that are not done, distinguished per pre-closure state. |
 | Carryover | Unfinished work observed moving into a later sprint; without that evidence, label it unfinished, not proven carryover. |
-| Velocity trend | Delivered estimates for recent closed sprints on the same board using the same estimate unit and metric policy. Show sample size; do not aggregate different teams' point scales. |
+| Velocity trend | Completed-during-sprint estimates for recent closed sprints on the same board using the same estimate unit and metric policy. Show sample size; do not aggregate different teams' point scales. |
 | Blockers | Explicit blocker flags, configured blocked statuses and issue links. Narrative concerns inferred from text are labeled separately. |
 
 Resolve “done” from configured board columns/status mapping and version that mapping; do not assume a status literally named Done. Treat missing estimates as unknown rather than zero, display estimate coverage, and avoid counting both parent and subtask estimates unless the team's policy explicitly calls for it.

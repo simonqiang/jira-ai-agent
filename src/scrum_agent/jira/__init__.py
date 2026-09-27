@@ -1,0 +1,1 @@
+"""Typed Jira Cloud adapter."""
