@@ -8,9 +8,10 @@ credentials are never logged.
 
 from __future__ import annotations
 
-import logging
-from collections.abc import Iterator
-from typing import Any
+import math
+import re
+from collections.abc import Callable, Iterator
+from typing import Any, TypeVar
 
 import httpx
 
@@ -24,7 +25,7 @@ from scrum_agent.jira.errors import (
 )
 from scrum_agent.jira.models import Board, BoardConfiguration, Issue
 
-logger = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 _SEARCH_FIELDS = ["summary", "status", "issuetype", "assignee", "updated"]
 
@@ -58,64 +59,127 @@ class JiraClient:
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        response = self._http.request(method, path, params=params, json=json)
+        try:
+            response = self._http.request(method, path, params=params, json=json)
+        except httpx.RequestError:
+            raise JiraApiError("Cannot reach Jira; check network access and retry") from None
 
         if response.status_code == 429:
-            retry_after = response.headers.get("Retry-After")
+            try:
+                retry_after = float(response.headers.get("Retry-After", ""))
+                if not math.isfinite(retry_after) or retry_after < 0:
+                    retry_after = None
+            except ValueError:
+                retry_after = None
             raise JiraRateLimitedError(
                 "Jira rate limit reached; honor Retry-After before retrying",
-                retry_after=float(retry_after) if retry_after is not None else None,
+                retry_after=retry_after,
             )
         if response.status_code == 401:
             raise JiraAuthError(
                 "Jira rejected the credentials (401): check token validity/expiry, "
-                "the account email, and that the auth mode matches the token type "
+                "the account email, required endpoint scopes, and the token's auth mode "
                 "(scoped tokens need central endpoints and jira_cloud_id)",
                 status_code=401,
             )
         if response.status_code == 403:
             raise JiraPermissionError(
-                "Jira denied access (403): the account may lack permission for this resource",
+                "Jira denied access (403): check resource permissions and token scopes",
                 status_code=403,
             )
         if response.status_code == 404:
             raise JiraNotFoundError(f"Not found: {path}", status_code=404)
         if not response.is_success:
             raise JiraApiError(
-                f"Jira error {response.status_code} on {path}: {self._error_messages(response)}",
+                f"Jira error {response.status_code}; check the request and service availability. "
+                "Upstream response content omitted for privacy.",
                 status_code=response.status_code,
             )
         if not response.content:
             return {}
-        return response.json()
+        try:
+            payload = response.json()
+        except ValueError:
+            raise JiraApiError("Jira returned a non-JSON response") from None
+        if not isinstance(payload, dict):
+            raise JiraApiError("Jira returned an unexpected response shape")
+        return payload
 
     @staticmethod
-    def _error_messages(response: httpx.Response) -> str:
+    def _parse_response(parser: Callable[[dict], _T], payload: dict) -> _T:
         try:
-            body = response.json()
-        except ValueError:
-            return response.text[:200]
-        parts = list(body.get("errorMessages") or [])
-        warning_messages = body.get("warningMessages") or []
-        parts.extend(warning_messages)
-        return "; ".join(parts) or response.text[:200]
+            return parser(payload)
+        except (KeyError, TypeError, ValueError, AttributeError):
+            raise JiraApiError("Jira returned incomplete or invalid resource data") from None
+
+    def _check_issue_scope(self, issue_key: str) -> None:
+        pattern = rf"{re.escape(self._settings.jira_project_key)}-[1-9][0-9]*"
+        if not re.fullmatch(pattern, issue_key):
+            raise JiraPermissionError("Issue is outside the configured pilot project")
+
+    def _check_board_scope(self, board_id: int) -> None:
+        if board_id != self._settings.jira_board_id:
+            raise JiraPermissionError("Board is outside the configured pilot scope")
 
     # -- reads -------------------------------------------------------------
 
     def get_issue(self, issue_key: str) -> Issue:
-        return Issue.from_api(self._request("GET", f"/rest/api/3/issue/{issue_key}"))
+        self._check_issue_scope(issue_key)
+        issue = self._parse_response(
+            Issue.from_api, self._request("GET", f"/rest/api/3/issue/{issue_key}")
+        )
+        self._check_issue_scope(issue.key)  # Jira may resolve a moved issue's old key.
+        return issue
 
     def get_board(self, board_id: int) -> Board:
-        return Board.from_api(self._request("GET", f"/rest/agile/1.0/board/{board_id}"))
+        self._check_board_scope(board_id)
+        return self._parse_response(
+            Board.from_api, self._request("GET", f"/rest/agile/1.0/board/{board_id}")
+        )
 
     def get_board_configuration(self, board_id: int) -> BoardConfiguration:
-        return BoardConfiguration.from_api(
-            self._request("GET", f"/rest/agile/1.0/board/{board_id}/configuration")
+        self._check_board_scope(board_id)
+        return self._parse_response(
+            BoardConfiguration.from_api,
+            self._request("GET", f"/rest/agile/1.0/board/{board_id}/configuration"),
         )
 
     def _scoped_jql(self, jql: str) -> str:
         """Hard-scope every search to the configured pilot project (spec section 10:
         indexing and queries are bounded to selected projects)."""
+        # Week 1 accepts predicates only. Validate grouping so caller text cannot
+        # escape the outer project restriction; Jira validates predicate syntax.
+        depth = 0
+        quote: str | None = None
+        escaped = False
+        unquoted: list[str] = []
+        for character in jql:
+            if quote:
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == quote:
+                    quote = None
+                unquoted.append(" ")
+                continue
+            if character in ("'", '"'):
+                quote = character
+                unquoted.append(" ")
+                continue
+            unquoted.append(character)
+            if character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+                if depth < 0:
+                    raise JiraApiError("JQL must have balanced parentheses")
+        if quote or depth != 0 or not jql.strip():
+            raise JiraApiError("JQL must be a nonempty predicate with balanced quotes/parentheses")
+        if re.search(r"\border\s+by\b", "".join(unquoted), re.IGNORECASE):
+            raise JiraApiError(
+                "Pass a JQL predicate without ORDER BY; sorting is not supported yet"
+            )
         return f"project = {self._settings.jira_project_key} AND ({jql})"
 
     def iter_search_jql(
@@ -139,8 +203,19 @@ class JiraClient:
             if token is not None:
                 body["nextPageToken"] = token
             payload = self._request("POST", "/rest/api/3/search/jql", json=body)
-            yield from (Issue.from_api(issue) for issue in payload.get("issues") or [])
-            token = payload.get("nextPageToken")
+            items = payload.get("issues")
+            next_token = payload.get("nextPageToken")
+            if not isinstance(items, list) or (
+                next_token is not None and not isinstance(next_token, str)
+            ):
+                raise JiraApiError("Jira returned an invalid search page")
+            if payload.get("isLast") is False and not next_token:
+                raise JiraApiError("Jira returned an incomplete search page without a next token")
+            for item in items:
+                issue = self._parse_response(Issue.from_api, item)
+                self._check_issue_scope(issue.key)
+                yield issue
+            token = next_token
             if not token:
                 return
         raise JiraApiError(

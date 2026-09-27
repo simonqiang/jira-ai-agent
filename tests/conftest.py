@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from scrum_agent.config import Settings
@@ -21,6 +23,13 @@ def make_settings(**overrides: object) -> Settings:
     values = {**_DUMMY, **overrides}
     # _env_file=None keeps tests isolated from a developer's real .env
     return Settings(_env_file=None, **values)  # type: ignore[arg-type,call-arg]
+
+
+@pytest.fixture(autouse=True)
+def isolate_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in os.environ:
+        if key.startswith("SCRUM_AGENT_"):
+            monkeypatch.delenv(key)
 
 
 @pytest.fixture

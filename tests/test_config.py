@@ -72,3 +72,28 @@ def test_values_are_stripped() -> None:
 def test_site_must_be_bare_host() -> None:
     with pytest.raises(ValidationError):
         make_settings(jira_site="https://test.atlassian.net")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"jira_api_token": "   "},
+        {"jira_auth_mode": "basic_central", "jira_cloud_id": "   "},
+        {"jira_auth_mode": "basic_central", "jira_cloud_id": "../other"},
+        {"jira_project_key": "PAY OR project = OTHER"},
+        {"known_issue_key": "OTHER-1"},
+        {"known_issue_key": "PAY-1/../../search"},
+        {"report_timezone": "Invalid/Timezone"},
+        {"jira_site": "test.atlassian.net@evil.example"},
+        {"jira_site": "test.atlassian.net?query"},
+    ],
+)
+def test_invalid_configuration_fails_before_network(overrides: dict) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(**overrides)
+
+
+def test_validation_error_does_not_disclose_raw_token() -> None:
+    with pytest.raises(ValidationError) as caught:
+        make_settings(jira_auth_mode="invalid")
+    assert "tok-test-123" not in str(caught.value)

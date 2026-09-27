@@ -27,7 +27,8 @@ reports (Week 5) are built on them.
   granted.
 - Estimate field (story points vs. custom field) once the board is reachable.
 - Three anonymized ticket examples and one sprint-report baseline (`docs/samples/`).
-- Monthly budget figure (informed by the Week 3 model-call measurements).
+- Organization-policy approval for the proposed region and a provisional monthly
+  budget ceiling (refine with Week 3 model-call measurements).
 
 ## Live probe findings (2026-09-27)
 
@@ -49,6 +50,22 @@ Verified against `dhl.atlassian.net` with a scoped personal token:
   must be verified as a GACD board once board scope is granted.
 
 ## Consequences
+
+### Verification follow-up (2026-09-27)
+
+Read-only recheck: the configured known issue succeeds; both the selected board and
+its configuration return **401**. The complete Week 1 demo remains blocked. Missing
+endpoint scopes are a likely cause, but the token's scope inventory was not inspected
+and no access changes were made.
+
+The [board API reference](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/)
+lists `read:board-scope:jira-software` plus `read:issue-details:jira` for board metadata;
+configuration needs `read:board-scope.admin:jira-software` plus `read:project:jira`.
+Check these read scopes and the user's board/filter access before retrying. No write
+scope is required. Use the configuration's filter ID to verify scope in Jira;
+project location alone is not proof that all board issues belong to the pilot project.
+
+### Implementation implications
 
 - Week 1 probe and Week 2 search run against the pilot user's own token; permissions are
   Jira-native for live reads.

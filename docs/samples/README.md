@@ -15,8 +15,11 @@ customer data, credentials or real issue keys — see spec §11).
    - Time taken to prepare (minutes) — the pilot's improvement baseline.
    - Which numbers you computed and where they came from.
 
-3. **Board facts** — board ID, project key, estimate field, done column mapping
-   (the probe prints it; paste the output here once run).
+3. **Board facts** — board type, filter scope, estimate field, done-status ID mapping
+   (the probe prints metadata; transcribe only anonymized facts, never raw output).
+   Replace real ticket keys, links, names and summaries with placeholders. Keep any
+   necessary real board/project configuration in the local `.env` or an approved
+   private decision record. A board's location does not establish its filter scope.
 
 ## Templates
 
