@@ -10,6 +10,7 @@ _DUMMY = {
     "jira_site": "test.atlassian.net",
     "jira_user_email": "sm@test.example",
     "jira_api_token": "tok-test-123",
+    "jira_auth_mode": "basic_site",
     "jira_board_id": 42,
     "known_issue_key": "PAY-1",
 }
@@ -17,7 +18,8 @@ _DUMMY = {
 
 def make_settings(**overrides: object) -> Settings:
     values = {**_DUMMY, **overrides}
-    return Settings(**values)  # type: ignore[arg-type]
+    # _env_file=None keeps tests isolated from a developer's real .env
+    return Settings(_env_file=None, **values)  # type: ignore[arg-type,call-arg]
 
 
 @pytest.fixture

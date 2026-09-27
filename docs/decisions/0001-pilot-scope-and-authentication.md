@@ -27,6 +27,21 @@ reports (Week 5) are built on them.
 - Three anonymized ticket examples and one sprint-report baseline (`docs/samples/`).
 - Monthly budget figure (informed by the Week 3 model-call measurements).
 
+## Live probe findings (2026-09-27)
+
+Verified against `dhl.atlassian.net` with a scoped personal token:
+
+- Basic auth (email:token) against the **site URL is rejected (401)** for this token
+  type; the same credentials succeed against the central endpoints
+  `https://api.atlassian.com/ex/jira/{cloudId}` — pilot uses `basic_central`.
+- cloudId for this site: recorded in `.env` (not in source control).
+- Issue reads and JQL search work with the current scopes (a bounded JQL is required:
+  unbounded queries are rejected with 400).
+- The Jira Software **board API returns 401 "scope does not match"** — the token was
+  created without board/sprint read scopes. Recreate the token adding board/sprint
+  read access (or the classic `read:jira-work` scope bundle) to complete Week 1's
+  board-configuration fetch.
+
 ## Consequences
 
 - Week 1 probe and Week 2 search run against the pilot user's own token; permissions are

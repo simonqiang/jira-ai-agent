@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import base64
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,14 +31,40 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    jira_site: str
-    jira_user_email: str
+    jira_site: str = Field(min_length=1)
+    jira_user_email: str = Field(min_length=1)
     jira_api_token: SecretStr
     jira_auth_mode: str = AuthMode.BASIC_SITE
     jira_cloud_id: str | None = None
-    jira_board_id: int
-    known_issue_key: str
+    jira_board_id: int = Field(gt=0)
+    known_issue_key: str = Field(min_length=1)
     report_timezone: str = "Asia/Hong_Kong"
+
+    @field_validator(
+        "jira_site", "jira_user_email", "jira_auth_mode", "known_issue_key", mode="before"
+    )
+    @classmethod
+    def _strip_strings(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("jira_api_token", mode="before")
+    @classmethod
+    def _strip_token(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("jira_site")
+    @classmethod
+    def _site_is_bare_host(cls, value: str) -> str:
+        if "://" in value or "/" in value:
+            raise ValueError(
+                "jira_site must be the bare host, e.g. 'yourteam.atlassian.net' "
+                "(no https:// and no path)"
+            )
+        return value
 
     @model_validator(mode="after")
     def _check_auth_mode(self) -> Settings:

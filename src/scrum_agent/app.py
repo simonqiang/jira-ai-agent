@@ -74,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
         settings = Settings()  # type: ignore[call-arg]
     except ValidationError as error:

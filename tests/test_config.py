@@ -55,3 +55,20 @@ def test_bearer_central_auth_header() -> None:
 def test_unknown_auth_mode_rejected() -> None:
     with pytest.raises(ValidationError):
         make_settings(jira_auth_mode="oauth_magic")
+
+
+def test_blank_values_rejected() -> None:
+    with pytest.raises(ValidationError):
+        make_settings(known_issue_key="   ")
+    with pytest.raises(ValidationError):
+        make_settings(jira_board_id=0)
+
+
+def test_values_are_stripped() -> None:
+    settings = make_settings(jira_site=" test.atlassian.net ")
+    assert settings.base_url() == "https://test.atlassian.net"
+
+
+def test_site_must_be_bare_host() -> None:
+    with pytest.raises(ValidationError):
+        make_settings(jira_site="https://test.atlassian.net")
