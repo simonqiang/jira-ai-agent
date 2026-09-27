@@ -1,0 +1,78 @@
+# ADR-0001: Pilot scope and authentication
+
+Status: accepted (Week 1, 2026-09-27)
+Supersedes: provisional assumptions in spec §1.
+
+## Context
+
+The roadmap's Week 1 requires confirming the Jira deployment, pilot authentication,
+report timezone and board context before local collection and reports are built on them.
+
+## Decision
+
+| Item | Decision | Notes |
+|---|---|---|
+| Jira deployment | **Jira Cloud** | REST v3 + Jira Software board APIs as designed. |
+| Pilot authentication | **Scoped personal API token** | Self-service, per-token scopes, selectable expiry; recommended pilot expiry ≤ 90 days. OAuth 3LO is out of scope for the PC-only pilot. |
+| Auth endpoints | Token type selects the base URL | Scoped tokens must use `api.atlassian.com/ex/jira/{cloudId}`; the client supports `basic_site`, `basic_central`, `bearer_central`. |
+| Report timezone | **Asia/Hong_Kong** | Stored UTC, rendered local (spec §10). |
+| Application runtime | **User's PC** | No Google Cloud deployment, public webhook or hosted collector is required for the personal pilot. |
+| Credential monitoring | Required from Week 4 | Expiring/expired tokens surface as a collection-freshness alarm, not silent gaps. |
+
+## Remaining Week 1 inputs (owner: pilot user)
+
+- ~~Project key~~ confirmed: **GACD** (hard-scoped in every search).
+- ~~Board and estimate field~~ confirmed (2026-09-27 live probe): board **23031**
+  "GenAI Customer Data" (scrum, `projectKey=GACD`), saved filter **73068** whose JQL is
+  `project = GACD ORDER BY Rank ASC` — board scope verified equal to the pilot project,
+  no cross-project leakage. Estimation is a field: `customfield_10033` (Story Points);
+  done-status ID **10114** from the board's column mapping.
+- Three anonymized ticket examples and one sprint-report baseline (`docs/samples/`).
+- Model provider choice and API/privacy terms (if using Gemini remotely) or local
+  model runtime requirements. Measure provider cost or local compute instead of
+  setting a Google Cloud hosting budget.
+- Token hygiene: confirm the token value exposed in a chat session on 2026-09-27 was
+  revoked in Atlassian's API-token page.
+
+## Live probe findings (2026-09-27)
+
+Verified against `dhl.atlassian.net` with a scoped personal token:
+
+- Basic auth (email:token) against the **site URL is rejected (401)** for this token
+  type; the same credentials succeed against the central endpoints
+  `https://api.atlassian.com/ex/jira/{cloudId}` — pilot uses `basic_central`.
+- cloudId for this site: recorded in `.env` (not in source control).
+- Issue reads and JQL search work with the current scopes (a bounded JQL is required:
+  unbounded queries are rejected with 400).
+- **Classic `read:jira-work` does not cover the agile board API for scoped tokens.**
+  Board/sprint endpoints require additional granular read scopes (search "board" and
+  "sprint" under Granular type, Read action in the token scope picker); issue endpoints
+  work with classic `read:jira-work` alone. `myself` also needs a profile scope the
+  pilot token omits — not required by the application.
+- **Project scope confirmed: GACD.** `jira_project_key` is a required setting and every
+  search the client runs is hard-scoped with `project = GACD AND (...)`; board 31347
+  must be verified as a GACD board once board scope is granted.
+
+## Consequences
+
+### Verification follow-up (2026-09-27 — resolved)
+
+Read-only recheck earlier the same day: known issue OK, board 31347 and its
+configuration 401. **Resolved in a later recheck**: the pilot board is 23031 (the
+GACD board; 31347 was replaced in `.env`), and with the final scoped token the full
+probe exits 0 — issue read, board metadata, board configuration (column/status-ID
+mapping) and the saved filter all return 200 via `basic_central`. The filter's JQL
+(`project = GACD ORDER BY Rank ASC`) was read through the filter API to verify the
+board's scope matches the pilot project, since a board's location alone is not proof
+of its issue scope.
+
+The earlier board 401s preceded the token carrying granular board scopes; granular
+`jira-software` read scopes on a scoped token did unlock `/rest/agile/1.0/*` once
+present (contrary to the interim hypothesis that they could not).
+
+### Implementation implications
+
+- Week 1 probe and Week 2 search run against the pilot user's own token; permissions are
+  Jira-native for live reads. The application and any local worker run on the user's PC.
+- Migration to 3LO, public webhooks or hosted multi-user operation is explicitly out of
+  scope for this pilot and would require a new design decision.
