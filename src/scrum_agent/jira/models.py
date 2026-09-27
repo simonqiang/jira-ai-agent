@@ -66,6 +66,34 @@ class BoardColumn(_Model):
         )
 
 
+class Sprint(_Model):
+    id: int
+    name: str
+    state: str  # Jira Software states: future, active or closed.
+    origin_board_id: int
+    start_date: str | None = None
+    end_date: str | None = None
+    complete_date: str | None = None
+    goal: str | None = None
+
+    @classmethod
+    def from_api(cls, payload: dict) -> Sprint:
+        return cls(
+            id=payload["id"],
+            name=payload.get("name") or "",
+            state=payload.get("state") or "",
+            origin_board_id=payload["originBoardId"],
+            start_date=payload.get("startDate"),
+            end_date=payload.get("endDate"),
+            complete_date=payload.get("completeDate"),
+            goal=payload.get("goal"),
+        )
+
+    @property
+    def is_closed(self) -> bool:
+        return self.state == "closed"
+
+
 class BoardConfiguration(_Model):
     """Board column/status mapping - the authoritative source for the done rule."""
 

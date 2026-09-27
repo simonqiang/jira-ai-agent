@@ -1,8 +1,7 @@
-"""Week 1 CLI: probe the configured Jira connection.
+"""CLI for the personal pilot: probe, sprints and search (Weeks 1-2).
 
-Fetches the configured known issue, board and board configuration, and prints a
-sanitized summary (no credentials). Exit codes: 0 success, 1 Jira/API error,
-2 configuration error.
+Prints sanitized summaries only (no credentials, no assignee names). Exit codes:
+0 success, 1 Jira/search error, 2 configuration or input error.
 """
 
 from __future__ import annotations
@@ -18,21 +17,53 @@ from pydantic import ValidationError
 from scrum_agent.config import Settings
 from scrum_agent.jira.client import JiraClient
 from scrum_agent.jira.errors import JiraApiError, JiraError
+from scrum_agent.search.errors import AmbiguousSprintError, SearchError
+from scrum_agent.search.filters import IssueFilters
+from scrum_agent.search.service import SearchService
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="scrum-agent", description="Scrum Master Jira assistant (personal pilot)"
     )
-    parser.add_argument(
-        "command",
-        nargs="?",
-        default="probe",
-        choices=["probe"],
-        help="probe: fetch the known issue and board metadata (default)",
-    )
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
-    return parser.parse_args(argv)
+    subparsers = parser.add_subparsers(dest="command", metavar="command")
+
+    subparsers.add_parser("probe", help="fetch the known issue and board metadata (default)")
+
+    sprints_parser = subparsers.add_parser(
+        "sprints", help="list the pilot board's sprints (Week 2)"
+    )
+    sprints_parser.add_argument(
+        "--state",
+        default="",
+        help="comma-separated sprint states to include: future, active, closed "
+        "(default: all states)",
+    )
+
+    search_parser = subparsers.add_parser(
+        "search", help="typed Jira search over the pilot board (Week 2)"
+    )
+    search_parser.add_argument("--issue", help="look up a single issue key, e.g. PAY-1")
+    search_parser.add_argument(
+        "--sprint", help="sprint name or numeric ID; ambiguous names prompt a selection"
+    )
+    search_parser.add_argument("--status", action="append", help="status name (repeatable)")
+    search_parser.add_argument(
+        "--type", action="append", help="issue type name, e.g. Bug (repeatable)"
+    )
+    search_parser.add_argument(
+        "--assignee",
+        action="append",
+        help="assignee display name, or 'Unassigned' (repeatable)",
+    )
+    search_parser.add_argument("--label", action="append", help="label (repeatable)")
+    search_parser.add_argument("--unresolved", action="store_true", help="only unresolved issues")
+
+    args = parser.parse_args(argv)
+    if args.command is None:
+        args.command = "probe"
+    return args
 
 
 def _probe(settings: Settings) -> int:
@@ -87,6 +118,82 @@ def _probe(settings: Settings) -> int:
     return 0
 
 
+def _sprints(settings: Settings, args: argparse.Namespace) -> int:
+    states = tuple(state.strip() for state in args.state.split(",") if state.strip())
+    with JiraClient(settings) as client:
+        sprints = SearchService(client).list_sprints(states=states)
+
+    fetched = datetime.now(UTC).isoformat(timespec="seconds")
+    print(f"Sprints on board {settings.jira_board_id} - fetched {fetched}")
+    for sprint in sprints:
+        print(f"  {sprint.id}: {sprint.name} [{sprint.state}]")
+    print(f"\n{len(sprints)} sprint(s).")
+    return 0
+
+
+def _print_issue(settings: Settings, issue) -> None:
+    print(f"\n{issue.key}: {issue.summary}")
+    print(f"  link=https://{settings.jira_site}/browse/{issue.key}")
+    print(f"  status={issue.status} type={issue.issue_type}", end="")
+    if issue.updated:
+        print(f" updated={issue.updated}", end="")
+    print()
+
+
+def _search(settings: Settings, args: argparse.Namespace) -> int:
+    if args.issue and (
+        args.sprint or args.status or args.type or args.assignee or args.label or args.unresolved
+    ):
+        print("Use either --issue or search filters, not both.", file=sys.stderr)
+        return 2
+
+    with JiraClient(settings) as client:
+        service = SearchService(client)
+
+        if args.issue:
+            _print_issue(settings, service.get_issue(args.issue))
+            print("\n1 issue.")
+            return 0
+
+        if not (
+            args.sprint
+            or args.status
+            or args.type
+            or args.assignee
+            or args.label
+            or args.unresolved
+        ):
+            print(
+                "Specify --issue or at least one filter: --sprint, --status, --type, "
+                "--assignee, --label, --unresolved.",
+                file=sys.stderr,
+            )
+            return 2
+
+        sprint = service.resolve_sprint(args.sprint) if args.sprint else None
+        filters = IssueFilters(
+            statuses=args.status or (),
+            issue_types=args.type or (),
+            assignees=args.assignee or (),
+            labels=args.label or (),
+            unresolved_only=args.unresolved,
+            sprint_id=sprint.id if sprint is not None else None,
+        )
+        result = service.search_issues(filters)
+
+    print(f"Search - fetched {result.fetched_at.isoformat(timespec='seconds')}")
+    if result.sprint is not None:
+        print(f"Sprint: {result.sprint.id} {result.sprint.name} [{result.sprint.state}]")
+    print(f"JQL: {result.jql}")
+    for issue in result.issues:
+        _print_issue(settings, issue)
+    if result.is_empty:
+        print("\nNo issues match the query (checked: 0 issues).")
+    else:
+        print(f"\n{result.result_count} issue(s).")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     logging.basicConfig(
@@ -105,7 +212,26 @@ def main(argv: list[str] | None = None) -> int:
         print("See .env.example for the expected variables.", file=sys.stderr)
         return 2
     try:
+        if args.command == "sprints":
+            return _sprints(settings, args)
+        if args.command == "search":
+            return _search(settings, args)
         return _probe(settings)
+    except AmbiguousSprintError as error:
+        print(f"Jira error: {error}", file=sys.stderr)
+        print("Choose one of:", file=sys.stderr)
+        for candidate in error.candidates:
+            print(f"  {candidate.id}: {candidate.name} [{candidate.state}]", file=sys.stderr)
+        return 1
+    except SearchError as error:
+        print(f"Search error: {error}", file=sys.stderr)
+        return 1
+    except ValidationError as error:
+        print("Invalid search input:", file=sys.stderr)
+        for problem in error.errors():
+            location = ".".join(str(part) for part in problem["loc"])
+            print(f"  {location or '(root)'}: {problem['msg']}", file=sys.stderr)
+        return 2
     except JiraError as error:
         print(f"Jira error: {error}", file=sys.stderr)
         return 1

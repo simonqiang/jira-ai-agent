@@ -331,3 +331,153 @@ def test_malformed_search_page_is_not_reported_as_complete(payload: dict) -> Non
     client, _ = make_client(lambda request: ok(payload))
     with pytest.raises(JiraApiError):
         list(client.iter_search_jql("status = Open"))
+
+
+# -- sprints (Week 2) ----------------------------------------------------------
+
+SPRINT_PAYLOAD = {
+    "id": 77,
+    "name": "Payments R1",
+    "state": "closed",
+    "startDate": "2026-09-14T01:00:00.000Z",
+    "endDate": "2026-09-27T01:00:00.000Z",
+    "completeDate": "2026-09-27T02:00:00.000Z",
+    "originBoardId": 42,
+    "goal": "Stabilize checkout",
+}
+
+
+def sprint_page(values: list[dict], *, is_last: bool, start_at: int = 0) -> dict:
+    return {
+        "maxResults": 50,
+        "startAt": start_at,
+        "isLast": is_last,
+        "total": start_at + len(values),
+        "values": values,
+    }
+
+
+def test_get_sprint_parses_fields() -> None:
+    client, _ = make_client(lambda request: ok(SPRINT_PAYLOAD))
+    sprint = client.get_sprint(77)
+    assert (sprint.id, sprint.name, sprint.state, sprint.origin_board_id) == (
+        77,
+        "Payments R1",
+        "closed",
+        42,
+    )
+    assert sprint.is_closed
+    assert sprint.goal == "Stabilize checkout"
+    assert sprint.complete_date is not None
+
+
+def test_get_sprint_from_foreign_board_fails_closed() -> None:
+    client, _ = make_client(lambda request: ok({**SPRINT_PAYLOAD, "originBoardId": 99}))
+    with pytest.raises(JiraPermissionError):
+        client.get_sprint(77)
+
+
+@pytest.mark.parametrize("sprint_id", [0, -1])
+def test_get_sprint_rejects_invalid_ids_before_http(sprint_id: int) -> None:
+    client, requests = make_client(lambda request: ok(SPRINT_PAYLOAD))
+    with pytest.raises(JiraApiError):
+        client.get_sprint(sprint_id)
+    assert requests == []
+
+
+def test_iter_board_sprints_follows_start_at_pagination() -> None:
+    pages = [
+        sprint_page([SPRINT_PAYLOAD], is_last=False),
+        sprint_page(
+            [{**SPRINT_PAYLOAD, "id": 78, "name": "Payments R2", "state": "active"}],
+            is_last=True,
+            start_at=1,
+        ),
+    ]
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/board/42/sprint")
+        calls.append(dict(request.url.params))
+        return ok(pages[len(calls) - 1])
+
+    client, _ = make_client(handler)
+    sprints = list(client.iter_board_sprints(42))
+
+    assert [sprint.id for sprint in sprints] == [77, 78]
+    assert len(calls) == 2
+    assert calls[0]["startAt"] == "0"
+    assert calls[1]["startAt"] == "1"
+    assert calls[0]["maxResults"] == "50"
+
+
+def test_iter_board_sprints_sends_state_filter() -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(request.url.params)
+        return ok(sprint_page([], is_last=True))
+
+    client, _ = make_client(handler)
+    list(client.iter_board_sprints(42, states=("active", "closed")))
+    assert seen["state"] == "active,closed"
+
+
+def test_iter_board_sprints_rejects_invalid_states_before_http() -> None:
+    client, requests = make_client(lambda request: ok(sprint_page([], is_last=True)))
+    with pytest.raises(JiraApiError, match="Invalid sprint states"):
+        list(client.iter_board_sprints(42, states=("active", "deleted")))
+    assert requests == []
+
+
+def test_iter_board_sprints_enforces_page_limit() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return ok(sprint_page([SPRINT_PAYLOAD], is_last=False))
+
+    client, _ = make_client(handler)
+    with pytest.raises(JiraApiError, match="exceeded"):
+        list(client.iter_board_sprints(42, max_pages=3))
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"values": []},
+        {"values": [], "isLast": False},
+        {"values": [SPRINT_PAYLOAD], "isLast": "yes"},
+        {"values": [{}], "isLast": True},
+    ],
+)
+def test_malformed_sprint_page_is_not_reported_as_complete(payload: dict) -> None:
+    client, _ = make_client(lambda request: ok(payload))
+    with pytest.raises(JiraApiError):
+        list(client.iter_board_sprints(42))
+
+
+def test_iter_board_sprints_empty_page_with_is_last_true_completes() -> None:
+    client, _ = make_client(lambda request: ok(sprint_page([], is_last=True)))
+    assert list(client.iter_board_sprints(42)) == []
+
+
+def test_iter_board_sprints_denies_foreign_board_sprint_in_listing() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return ok(sprint_page([{**SPRINT_PAYLOAD, "originBoardId": 99}], is_last=True))
+
+    client, _ = make_client(handler)
+    with pytest.raises(JiraPermissionError):
+        list(client.iter_board_sprints(42))
+
+
+def test_iter_board_sprints_blocks_other_board_before_http() -> None:
+    client, requests = make_client(lambda request: ok(sprint_page([], is_last=True)))
+    with pytest.raises(JiraPermissionError):
+        list(client.iter_board_sprints(99))
+    assert requests == []
+
+
+def test_client_exposes_the_centralized_scope() -> None:
+    from scrum_agent.auth import PilotScope
+
+    client, _ = make_client(lambda request: ok(ISSUE_PAYLOAD))
+    assert client.scope == PilotScope.from_settings(client._settings)

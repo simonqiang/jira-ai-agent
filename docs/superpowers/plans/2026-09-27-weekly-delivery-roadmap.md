@@ -95,10 +95,10 @@ These are future paths to guide implementation; this planning task does not crea
 
 **Weekly goal:** “I can find the correct tickets for a board, sprint and set of filters.”
 
-- [ ] Implement issue-key lookup, board/sprint selection and typed filters for status, assignee, issue type and labels.
-- [ ] Implement complete pagination, bounded requests and actionable handling of access denial and rate limits.
-- [ ] Establish trusted user/site scope and centralized access checks that later reports and retrieval must reuse.
-- [ ] Build a small checked query set containing empty results, ambiguous sprint names, multiple pages and a board spanning the allowed project scope.
+- [x] Implement issue-key lookup, board/sprint selection and typed filters for status, assignee, issue type and labels. *(Implemented in `src/scrum_agent/search/` (`IssueFilters` compiled to quoted, project-scoped JQL; `SearchService` with sprint resolution that prompts on ambiguity) plus client sprint endpoints; CLI `sprints`/`search` commands. Verified by mocked tests; the live Friday demo is pending.)*
+- [x] Implement complete pagination, bounded requests and actionable handling of access denial and rate limits. *(Sprint listing follows `startAt`/`isLast` with bounded pages and rejects incomplete/malformed pages; issue search already followed `nextPageToken`; 401/403/429 raise typed errors with actionable messages and `Retry-After`.)*
+- [x] Establish trusted user/site scope and centralized access checks that later reports and retrieval must reuse. *(`src/scrum_agent/auth/PilotScope` is now the single scope authority: the client, search service and checked queries all delegate to it; out-of-scope issues, boards and sprints fail closed.)*
+- [x] Build a small checked query set containing empty results, ambiguous sprint names, multiple pages and a board spanning the allowed project scope. *(`tests/checked_queries.py`: 14 queries over a fixture Jira implementing the real pagination contracts — empty results, exact/substring/ambiguous/unknown sprint names, multi-page search and sprint listing, cross-project results and cross-board sprints denied. Week 3 must answer the same set.)*
 
 **Friday demo:** Find unresolved bugs in the selected sprint and compare issue IDs with Jira.
 
