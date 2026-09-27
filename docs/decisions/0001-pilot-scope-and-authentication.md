@@ -22,13 +22,17 @@ reports (Week 5) are built on them.
 
 ## Remaining Week 1 inputs (owner: pilot user)
 
-- ~~Project key~~ confirmed: **GACD** (hard-scoped in every search). Board 31347 must
-  still be verified as a GACD board once the granular board/sprint token scopes are
-  granted.
-- Estimate field (story points vs. custom field) once the board is reachable.
+- ~~Project key~~ confirmed: **GACD** (hard-scoped in every search).
+- ~~Board and estimate field~~ confirmed (2026-09-27 live probe): board **23031**
+  "GenAI Customer Data" (scrum, `projectKey=GACD`), saved filter **73068** whose JQL is
+  `project = GACD ORDER BY Rank ASC` — board scope verified equal to the pilot project,
+  no cross-project leakage. Estimation is a field: `customfield_10033` (Story Points);
+  done-status ID **10114** from the board's column mapping.
 - Three anonymized ticket examples and one sprint-report baseline (`docs/samples/`).
 - Organization-policy approval for the proposed region and a provisional monthly
   budget ceiling (refine with Week 3 model-call measurements).
+- Token hygiene: confirm the token value exposed in a chat session on 2026-09-27 was
+  revoked in Atlassian's API-token page.
 
 ## Live probe findings (2026-09-27)
 
@@ -51,19 +55,20 @@ Verified against `dhl.atlassian.net` with a scoped personal token:
 
 ## Consequences
 
-### Verification follow-up (2026-09-27)
+### Verification follow-up (2026-09-27 — resolved)
 
-Read-only recheck: the configured known issue succeeds; both the selected board and
-its configuration return **401**. The complete Week 1 demo remains blocked. Missing
-endpoint scopes are a likely cause, but the token's scope inventory was not inspected
-and no access changes were made.
+Read-only recheck earlier the same day: known issue OK, board 31347 and its
+configuration 401. **Resolved in a later recheck**: the pilot board is 23031 (the
+GACD board; 31347 was replaced in `.env`), and with the final scoped token the full
+probe exits 0 — issue read, board metadata, board configuration (column/status-ID
+mapping) and the saved filter all return 200 via `basic_central`. The filter's JQL
+(`project = GACD ORDER BY Rank ASC`) was read through the filter API to verify the
+board's scope matches the pilot project, since a board's location alone is not proof
+of its issue scope.
 
-The [board API reference](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/)
-lists `read:board-scope:jira-software` plus `read:issue-details:jira` for board metadata;
-configuration needs `read:board-scope.admin:jira-software` plus `read:project:jira`.
-Check these read scopes and the user's board/filter access before retrying. No write
-scope is required. Use the configuration's filter ID to verify scope in Jira;
-project location alone is not proof that all board issues belong to the pilot project.
+The earlier board 401s preceded the token carrying granular board scopes; granular
+`jira-software` read scopes on a scoped token did unlock `/rest/agile/1.0/*` once
+present (contrary to the interim hypothesis that they could not).
 
 ### Implementation implications
 
