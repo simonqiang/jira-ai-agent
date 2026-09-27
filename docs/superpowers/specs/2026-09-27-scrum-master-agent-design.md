@@ -1,13 +1,13 @@
 # Scrum Master Jira Assistant — product requirements and architecture
 
-Status: design reviewed; revisions from the 2026-09-27 review applied. No application implementation or deployment yet.
-Date: 2026-09-27. Revision summary (three review rounds): pilot topology, export sanitization, asynchronous reports with durable Cloud Tasks execution, create correlation markers, batched permission rechecks, changelog-driven history, measured cost parameters, pilot configuration mechanics, authentication-dependent webhook branches, scoped-token facts, Week 4 load relief.
+Status: design reviewed; revisions from the 2026-09-27 review applied. Week 1 Jira foundation is implemented; the ADK application is not yet implemented.
+Date: 2026-09-27. Revision summary: local-PC runtime, export sanitization, local asynchronous report execution, create correlation markers, batched permission rechecks, changelog-driven history, measured cost parameters, pilot configuration mechanics and scoped-token facts.
 
 ## 1. Product brief
 
 Build an internal assistant that reduces a Scrum Master's time spent finding work, assembling sprint reports, and preparing clear Jira tickets. The user requested Google ADK and a vector-store recommendation. Success means useful answers supported by Jira evidence, reproducible sprint metrics, and ticket changes that follow the team's agreed conventions.
 
-Provisional assumptions: Jira Cloud; one organization and a small number of teams; English-first web interface; Google Cloud hosting; interactive use first; explicit review before each Jira write. These are design defaults, not confirmed requirements. Jira Data Center would change authentication, API adapters, networking, and some field handling.
+Provisional assumptions: Jira Cloud; one user; English-first web interface; the application runs on the user's PC and binds to loopback (`127.0.0.1`) only; interactive use first; explicit review before each Jira write. Google ADK and a Gemini provider may make outbound model/embedding API calls, but Google Cloud deployment is not required. Jira Data Center would change authentication, API adapters, networking, and some field handling.
 
 Primary user: Scrum Master. Secondary users: Product Owner reviewing backlog quality and team members finding context. An administrator configures projects, boards, permissions, and team templates. App roles never grant additional Jira permissions.
 
@@ -26,7 +26,7 @@ Primary user: Scrum Master. Secondary users: Product Owner reviewing backlog qua
 | FR-09 | Inspect provenance | Report and change records retain source IDs, timestamps, configuration versions and outcomes; user can open the underlying Jira issues. |
 | FR-10 | Export reports | MVP provides Markdown and CSV downloads with the same authorized data and provenance as the on-screen report. |
 
-Release scope: the personal pilot (roadmap Weeks 1–12) delivers FR-01 through FR-10 for one allowlisted user, one Jira site and one supported board. Shared-team administration of connections and team standards (FR-01, FR-08) and multi-user isolation are the later shared-team phase; see section 12.
+Release scope: the personal pilot (roadmap Weeks 1–12) delivers FR-01 through FR-10 for one allowlisted user, one Jira site and one supported board. Shared-team administration, multi-user isolation and hosted operation are out of scope.
 
 Example requests:
 
@@ -92,16 +92,16 @@ If history cannot establish original commitment, return the available status sum
 | ADK plus PostgreSQL/pgvector | Structured history, approvals and semantic retrieval share one database | Requires synchronization and permission-aware retrieval | Recommended target for MVP. |
 | ADK plus dedicated vector service and relational database | Independent retrieval scaling and specialized search features | Extra service, duplicated metadata and more synchronization | Revisit after measured need. |
 
-Build a modular Python application deployed on Cloud Run, with a separate background worker deployment from the same codebase. Start with one ADK conversational agent and typed domain tools. Search, reporting and ticket workflows are separate modules; introduce specialist agents only if evaluation shows a benefit. ADK supports both simple agents and larger workflows; see [agent architecture](https://google.github.io/adk-docs/agents/) and [function tools](https://google.github.io/adk-docs/tools-custom/function-tools/).
+Build a modular Python application that runs as a local FastAPI process on the user's PC, listening only on `127.0.0.1`. Start with one ADK conversational agent and typed domain tools. Search, reporting and ticket workflows are separate modules; introduce specialist agents only if evaluation shows a benefit. Use a Gemini API key from Google AI Studio for the preferred local model path; Vertex AI, `gcloud`, infrastructure provisioning and all deployment commands are excluded. ADK supports both simple agents and larger workflows; see [agent architecture](https://google.github.io/adk-docs/agents/) and [function tools](https://google.github.io/adk-docs/tools-custom/function-tools/).
 
-The diagram below is the target architecture. Pilot topology: one Cloud Run service (API, worker and agent in the same deployment), Cloud Scheduler calling an idempotent reconciliation endpoint, webhook ingestion as direct HTTP with deduplication where the Week 1 authentication choice supports webhooks (scheduled polling is the fallback, and reconciliation already tolerates missed events), and a server-rendered HTML interface instead of the React application. Asynchronous report jobs (from Week 5) need durable execution after the request ends or an instance restarts, which an in-process task cannot guarantee: add a Cloud Tasks queue targeting the same Cloud Run service, persist job state in PostgreSQL, and make execution idempotent and retry-safe. A 15-minute reconciliation schedule cannot serve the sub-minute report target. A separate worker deployment and the SPA remain shared-team-phase additions. The single-service pilot must still keep the module boundaries above so the later split is a deployment change, not a rewrite.
+The diagram below is the target local architecture. Run one local FastAPI process containing the UI, ADK agent and typed services. Run synchronization and report jobs in the same process or as a separately started local worker using a durable PostgreSQL job table; a local scheduler (for example, cron or Task Scheduler) can invoke reconciliation while the PC is on. Webhooks are not part of the PC-only pilot because the laptop is not a stable public endpoint; scheduled polling is the source of freshness, and reports disclose gaps when the process was stopped. The local design keeps module boundaries so hosting can be reconsidered later without making cloud deployment a Week 1–12 requirement.
 
 ```mermaid
 flowchart TD
     U[Scrum Master / Product Owner] --> UI[Web UI: chat, reports, ticket preview]
     UI --> API[FastAPI: authentication and authorization]
     API --> ADK[Google ADK agent]
-    ADK <--> LLM[Gemini through Google Cloud model API]
+    ADK <--> LLM[Gemini API or local model provider]
     ADK --> SEARCH[Search service]
     ADK --> REPORT[Deterministic sprint report service]
     ADK --> DRAFT[Ticket draft and validation service]
@@ -114,12 +114,12 @@ flowchart TD
     UI --> APPROVE[Approval and execution service]
     APPROVE --> DB
     APPROVE --> JIRA
-    EVENTS[Jira webhooks / scheduled reconciliation] --> QUEUE[Cloud Tasks]
+    EVENTS[Local scheduler / manual reconciliation] --> QUEUE[Local job table]
     QUEUE --> WORKER[Sync and report worker]
     WORKER --> JIRA
     WORKER --> DB
-    WORKER --> EMBED[Google embedding model]
-    REPORT --> FILES[Private report artifacts]
+    WORKER --> EMBED[Configured embedding provider]
+    REPORT --> FILES[Local report artifacts]
 ```
 
 The approval route is an authenticated application operation; the model cannot approve its own draft. API identity and Jira credentials are injected by trusted server code, never selected from model arguments.
@@ -129,31 +129,31 @@ The approval route is an authenticated application operation; the model cannot a
 | Layer | Recommendation |
 |---|---|
 | Agent framework | Google ADK for Python; pin a tested SDK version at implementation. |
-| Generation | A generally available Gemini model offered in the approved region; choose the exact version using task evaluations, latency and cost. |
+| Generation | Gemini API key from Google AI Studio (preferred local ADK path) or a local model provider; Vertex AI is excluded. Choose the exact model using task evaluations, latency, privacy and cost. |
 | Backend | FastAPI, Pydantic schemas, a typed HTTP Jira adapter, SQLAlchemy and database migrations. |
 | Frontend | Pilot: server-rendered HTML (Jinja/HTMX) with chat, source links, sprint selector, report view and diff approval. A React/TypeScript SPA replaces it in the shared-team phase if the pilot outgrows server rendering. |
-| Database | PostgreSQL with pgvector locally; Cloud SQL for PostgreSQL in production. |
+| Database | PostgreSQL with pgvector on the PC, preferably in Docker; SQLite is acceptable for the first live-read milestone before history/vector features. |
 | Embeddings | Benchmark `gemini-embedding-001` with a reduced 768-dimensional output as an initial text-only baseline; confirm availability at implementation. |
-| Runtime | Cloud Run for API and worker; Cloud Tasks for durable bounded jobs; Cloud Scheduler for reconciliation. |
+| Runtime | Local FastAPI/ADK process bound to `127.0.0.1`, plus an optional local worker and OS scheduler (cron/Task Scheduler). Never expose the pilot through a public URL. |
 | Sessions | Persistent ADK session service with user isolation; separate schemas for sessions and application records. |
-| Files | Private Cloud Storage for generated artifacts, with authorization checks before download. |
-| Credentials | Google Cloud workload identity/service accounts; Secret Manager for app secrets; encrypted per-user Jira OAuth tokens. |
+| Files | Local report directory with authorization checks in the application; keep it outside Git and back it up using the user's normal PC controls. |
+| Credentials | Environment variables or a local `.env` excluded from Git; prefer the OS credential store for longer-lived secrets. Never put tokens in source files or model prompts. |
 | Operations | Structured logs, request tracing, model/tool latency and cost metrics; redaction of tokens and sensitive issue content. |
 
-Cloud Run is a documented [ADK deployment option](https://google.github.io/adk-docs/deploy/cloud-run/). Persist sessions and artifacts outside container memory. Current [ADK action-confirmation documentation](https://google.github.io/adk-docs/tools-custom/confirmation/) lists limitations with DatabaseSessionService and VertexAiSessionService. Therefore durable approvals are application records, independent of that feature's compatibility.
+Persist sessions, jobs, approvals and artifacts in local durable storage rather than process memory. Current [ADK action-confirmation documentation](https://google.github.io/adk-docs/tools-custom/confirmation/) lists limitations with some session services; therefore durable approvals remain application records, independent of that feature's compatibility. If Gemini is selected, model calls still require network access and the applicable Google AI credentials; that is a provider dependency, not a deployment requirement.
 
-The proposed embedding configuration is a benchmark starting point, not a claim that it is best for this dataset. Google's [embedding documentation](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/embeddings/get-text-embeddings) supports configurable output dimensionality. Pin model ID, dimension, task type and normalization behavior; document/query embeddings must use compatible settings. Generate embeddings in the worker through the model API and store them in PostgreSQL.
+The proposed embedding configuration is a benchmark starting point, not a claim that it is best for this dataset. Pin model ID, dimension, task type and normalization behavior; document/query embeddings must use compatible settings. Generate embeddings through the selected provider's local/API client and store them in local PostgreSQL. Do not add Vertex AI or a managed vector service to this pilot.
 
-Cost parameters for the pilot, to be measured rather than assumed. Distinguish sprint size (the agreed 500-issue reporting dataset) from total indexed issues — membership reconstruction requires project-wide changelog history, not only current sprint members — plus historical lookback depth and daily request volume. Model-call volume depends on the number of model/tool interaction rounds. Multiple tool calls may be requested in one model response and share a round, so tool-call count alone does not determine model-call count. Measure model calls and tokens per completed task in Weeks 2–3, record actual cost weekly from Week 4, and do not conclude that model costs are minor before those measurements exist.
+Cost parameters for the pilot, to be measured rather than assumed. Distinguish sprint size (the agreed 500-issue reporting dataset) from total indexed issues — membership reconstruction requires project-wide changelog history, not only current sprint members — plus historical lookback depth and daily request volume. Model-call volume depends on the number of model/tool interaction rounds. Multiple tool calls may be requested in one model response and share a round, so tool-call count alone does not determine model-call count. Measure model calls, tokens and provider cost per completed task in Weeks 2–3; if a local model is used, record local compute/runtime instead.
 
 ## 7. Vector recommendation and retrieval design
 
-**Recommend PostgreSQL + pgvector.** The assistant already needs relational records for sprint history, permissions, report provenance and approval transactions. Keeping vectors with these records simplifies operation and filtering. Cloud SQL supports pgvector and externally generated embeddings; see [Cloud SQL generative AI support](https://docs.cloud.google.com/sql/docs/postgres/ai-overview).
+**Recommend local PostgreSQL + pgvector.** The assistant already needs relational records for sprint history, permissions, report provenance and approval transactions. Keeping vectors with these records simplifies operation and filtering. Run PostgreSQL locally (Docker is optional) and back up the data using the user's normal PC process.
 
 | Alternative | When to consider it |
 |---|---|
 | Qdrant | Choose when independent vector scaling and advanced dense/sparse retrieval are demonstrated needs. It offers [hybrid queries](https://qdrant.tech/documentation/search/hybrid-queries/) and [metadata filtering](https://qdrant.tech/documentation/search/filtering/); retain PostgreSQL for application transactions. |
-| Google Cloud Vector Search | Consider for a large corpus/high query load with a preference for a managed Google service. It has separate index/deployment concerns; see the [service overview](https://docs.cloud.google.com/vertex-ai/docs/vector-search/overview). Benchmark and estimate costs before changing stores. |
+| Managed vector service | Out of scope for the PC-only pilot. Reconsider only if a later user explicitly requests shared access or the local corpus outgrows PostgreSQL/pgvector. |
 
 Index approved ticket examples, issue summaries/descriptions and team guidance. Start without comments or attachments; add them only with their own visibility rules. Ticket content is evidence, not authority to change rules. Retrieve mandatory templates by exact project/type/version, not by similarity alone.
 
@@ -169,11 +169,11 @@ Jira Cloud descriptions are Atlassian Document Format: chunk by walking ADF node
 
 ## 8. Domain tools and Jira integration
 
-Expose narrow tools such as `resolve_sprint`, `search_issues`, `get_issue`, `find_similar_issues`, `build_sprint_report`, `get_report`, `get_ticket_template`, `draft_issue`, `propose_issue_update` and `validate_draft`. Their return schemas include data, sources, timestamp, completeness and structured errors. Report generation is always asynchronous: `build_sprint_report` starts a background job and returns a job handle with an estimate, and `get_report` reports status and, when ready, the result — even the sub-minute pilot target is too long for a blocking tool call in a conversation loop. The job is durably queued (Cloud Tasks targeting the same service in the pilot) with state persisted in the database, so it survives request end and instance restarts. The queue retries on failure and may deliver a task more than once, so the application — not the queue — enforces idempotency through persisted job identity and execution state; test duplicate delivery alongside restart recovery. Do not expose unrestricted HTTP, SQL or arbitrary code execution to the model.
+Expose narrow tools such as `resolve_sprint`, `search_issues`, `get_issue`, `find_similar_issues`, `build_sprint_report`, `get_report`, `get_ticket_template`, `draft_issue`, `propose_issue_update` and `validate_draft`. Their return schemas include data, sources, timestamp, completeness and structured errors. Report generation may be asynchronous: `build_sprint_report` creates a durable local job row and returns a job handle; a local worker processes it and `get_report` returns status/results. Jobs must survive process restart, and application idempotency must handle duplicate local execution. Do not expose unrestricted HTTP, SQL or arbitrary code execution to the model.
 
 Use Jira Cloud REST v3 for issues, fields and changelogs, and Jira Software APIs for boards/sprints. Prefer the enhanced JQL search endpoints under `/rest/api/3/search/jql`, respecting pagination. Discover create/edit field metadata, custom field IDs and hierarchy rules rather than hard-coding them. Encode rich text in the required Jira document format. These boundaries follow the [issue search API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/), [issue API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/), [board API](https://developer.atlassian.com/cloud/jira/software/rest/api-group-board/) and [sprint API](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprint/).
 
-Use [Atlassian OAuth 2.0 authorization-code grants](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/) for a shared application. App login and Jira authorization are separate relationships. Select scopes for the endpoints actually used. A personal prototype may use the user's own API token stored outside source control. Prefer a scoped token — Atlassian supports per-token scopes and selectable expiry from 1 to 365 days (default one year) — and note that scoped tokens must call the central `api.atlassian.com/ex/jira/{cloudId}` endpoints rather than the site URL; confirm endpoint compatibility with the adapter before choosing. An unattended collector using a personal token still needs expiry monitoring, and 3LO is required by the shared-team phase regardless. A broad service account must not become a way to expose issues that users cannot access.
+For this PC-only pilot, use the user's own scoped API token stored outside source control. Scoped tokens must call the central `api.atlassian.com/ex/jira/{cloudId}` endpoints; confirm endpoint compatibility with the adapter. Monitor token expiry. OAuth 3LO and multi-user identity are out of scope until a separate shared-team requirement is approved. A broad service account must not become a way to expose issues that users cannot access.
 
 Direct typed REST tools are the default for predictable report completeness, pagination and controlled writes. An approved Jira MCP integration can be an adapter if it exposes the required operations and equivalent authorization guarantees; it is not a mandatory dependency.
 
@@ -191,11 +191,11 @@ Logical records: users/Jira connections; project and board configuration version
 
 Every relevant record is scoped by Jira site and project, with user ownership or access rules where needed. Store timestamps in UTC and render in the configured team timezone. Keep chat memory separate from authoritative Jira history and team policies.
 
-Initial indexing is bounded to selected projects. Process all pages and record coverage. For the pilot, ingest using the user's authorized connection; a shared index requires candidate authorization as above. Handle webhooks as change hints, deduplicate, re-fetch authoritative data and ignore superseded revisions. Use scheduled incremental polling with overlap and periodic reconciliation to catch missed events. Remove/tombstone deleted and inaccessible content and invalidate obsolete embeddings. Maintain retention for conversations and report exports separately from the history needed for agreed reporting.
+Initial indexing is bounded to selected projects. Process all pages and record coverage. For the pilot, ingest using the user's authorized connection; a shared index requires candidate authorization as above. Use scheduled incremental polling with overlap and periodic reconciliation to catch missed events; public webhooks are out of scope for a PC-only runtime. Remove/tombstone deleted and inaccessible content and invalidate obsolete embeddings. Maintain retention for conversations and report exports separately from the history needed for agreed reporting.
 
-Validate webhook requests using the mechanism documented for the chosen registration method, and let the webhook choice follow the Week 1 authentication decision: with OAuth 3LO, use dynamically registered OAuth-app webhooks secured by a signed JWT bearer token in the `Authorization` header; with a personal-token pilot where the user has Jira administration rights, use administrator-configured webhooks validated by their HMAC signature (`X-Hub-Signature`) derived from a configured secret; if neither applies, run scheduled polling only and state the resulting freshness and history limitations in reports. A secret embedded in the URL is not the default design. Networking: Jira must be able to reach the webhook endpoint, so it requires authenticated public ingress, while scheduler, application and write endpoints keep separate access controls. Treat a webhook only as a change hint and reconciliation trigger, never as authorization for a write. Queue only authorized site/project work. Retrieved issue text is untrusted: it cannot change tool permissions, select credentials or approve writes. It also cannot inject into outputs: sanitize CSV exports against spreadsheet formula injection (cells beginning with `=`, `+`, `-` or `@`) and escape HTML/Markdown in rendered report views and exports. Enforce scope at service boundaries, including exports and cached reports. Cache keys must include access scope; a report generated with wider permissions cannot be reused for a narrower user without rebuilding it.
+The PC-only pilot uses scheduled polling only; do not register webhooks or expose public ingress. Treat each poll as a change hint and reconcile against authoritative Jira data. Retrieved issue text is untrusted: it cannot change tool permissions, select credentials or approve writes. It also cannot inject into outputs: sanitize CSV exports against spreadsheet formula injection (cells beginning with `=`, `+`, `-` or `@`) and escape HTML/Markdown in rendered report views and exports. Enforce scope at service boundaries, including exports and cached reports. Cache keys must include access scope; a report generated with wider permissions cannot be reused for a narrower user without rebuilding it.
 
-On Jira rate limits, honor Retry-After and use bounded retries/backoff. API/model outages produce clear partial results or resumable jobs, never fabricated completion. Limit tool calls, retrieval size, output tokens and execution duration. Verify organizations' region/retention requirements before ingesting real issue content.
+On Jira rate limits, honor Retry-After and use bounded retries/backoff. API/model outages produce clear partial results or resumable jobs, never fabricated completion. Limit tool calls, retrieval size, output tokens and execution duration. Verify the selected model provider's privacy/retention terms before ingesting real issue content.
 
 ## 11. Release criteria and evaluation
 
@@ -215,7 +215,7 @@ Track factual correctness, source validity, retrieval quality, write correctness
 
 ## 12. Delivery sequence and remaining decisions
 
-See the [weekly delivery roadmap](../plans/2026-09-27-weekly-delivery-roadmap.md) for a 12-week personal-pilot sequence, weekly goals and exit checks, followed by an optional shared-team phase. It assigns the design review findings to specific weeks and narrows the first release to one user and one supported board; shared-team requirements remain a later milestone.
+See the [weekly delivery roadmap](../plans/2026-09-27-weekly-delivery-roadmap.md) for a 12-week PC-only personal-pilot sequence, weekly goals and exit checks. It assigns the design review findings to specific weeks and narrows the release to one user and one supported board.
 
 1. Foundation and exact search: Jira connection, board/field discovery, identity checks and ADK read tools. Validate on a sandbox project.
 2. Sprint reporting: establish snapshots/history ingestion and deterministic metrics, then add narrative and exports. Begin snapshot collection early.
@@ -223,6 +223,6 @@ See the [weekly delivery roadmap](../plans/2026-09-27-weekly-delivery-roadmap.md
 4. Semantic retrieval: add pgvector, embeddings, hybrid retrieval and duplicate suggestions after an exact-search baseline exists.
 5. Pilot hardening: evaluate with the Scrum Master/PO, observe costs and failures, tune retrieval and release to the initial teams.
 
-Confirm before implementation: Jira Cloud versus Data Center; personal versus shared use; initial projects/boards and approximate issue count; actual ticket examples and custom fields; report definitions and output destinations; allowed hosting region; identity provider and monthly budget. Pilot authentication: scoped personal token (scopes selected, 1–365 day expiry, `api.atlassian.com` endpoints) versus OAuth 3LO from Week 1 — the shared-team phase requires 3LO, so building it early avoids a mid-pilot migration of the collector. Until answered, use the explicit assumptions in section 1 and treat sizing/cost choices as provisional.
+Confirm before implementation: Jira Cloud versus Data Center; local PC as the runtime; loopback-only binding; initial projects/boards and approximate issue count; actual ticket examples and custom fields; report definitions and output destinations; model provider/API privacy choice; and local backup policy. Pilot authentication uses a scoped personal token (scopes selected, 1–365 day expiry, `api.atlassian.com` endpoints). OAuth 3LO, Vertex AI, public webhooks, multi-user hosting and all deployment commands are out of scope for the PC-only pilot. Until answered, use the explicit assumptions in section 1 and treat sizing choices as provisional.
 
 This document provides the requested requirements and architecture. A detailed implementation plan and application build are subsequent work after the design is reviewed.

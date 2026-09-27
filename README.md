@@ -6,9 +6,19 @@ sprint reports and preparing clear Jira tickets. Design and weekly roadmap:
 - [Product requirements and architecture](docs/superpowers/specs/2026-09-27-scrum-master-agent-design.md)
 - [Weekly implementation roadmap](docs/superpowers/plans/2026-09-27-weekly-delivery-roadmap.md)
 
-Status: **Week 1 — foundation implemented; acceptance incomplete**. Live issue reads
-work, but board endpoints currently return 401; anonymized examples and the report
-baseline are still pending. See the [Week 1 verification note](docs/superpowers/notes/2026-09-27-week-1.md).
+Status: **Week 1 — Jira foundation verified; acceptance evidence incomplete**. Live
+issue and board reads work for board 23031; anonymized examples and the report baseline
+are still pending. See the [Week 1 verification note](docs/superpowers/notes/2026-09-27-week-1.md).
+
+The intended runtime is a **local PC application**. Google Cloud deployment, public
+webhooks and a hosted collector are not required. Google ADK may call a configured
+remote model provider (such as Gemini), so model credentials and network access may
+still be needed; that is separate from hosting the agent.
+
+For the preferred local ADK path, use a Gemini API key from Google AI Studio in the
+local `.env`; this does not require a Google Cloud project, `gcloud`, Vertex AI or any
+deployment command. Bind the local web service to `127.0.0.1` only — do not expose it
+to your LAN or the internet. See the [ADK local-authentication guidance](https://google.github.io/agents-cli/guide/authentication/).
 
 ## Quickstart
 

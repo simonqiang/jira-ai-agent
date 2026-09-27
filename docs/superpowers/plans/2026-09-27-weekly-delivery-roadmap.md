@@ -4,9 +4,9 @@
 
 **Goal:** Deliver a personal Scrum Master assistant through weekly increments that provide Jira search, reliable sprint reports, standards-based ticket drafting and approved writes, then semantic search.
 
-**Architecture:** One Google ADK agent calls typed Python services for Jira search, reporting and ticket preparation. PostgreSQL stores history, approvals and later vectors; server-side authorization applies to every data path. Start with one user and one Scrum board, then add shared-team operation as a separate extension. The pilot deploys a simplified topology — one Cloud Run service, Cloud Scheduler-driven idempotent reconciliation, webhook ingestion only where the Week 1 authentication choice supports it (otherwise scheduled polling), and a Cloud Tasks queue added in Week 5 for durable report jobs — while keeping module boundaries so the shared-team split is a deployment change, not a rewrite.
+**Architecture:** One Google ADK agent calls typed Python services for Jira search, reporting and ticket preparation. PostgreSQL stores history, approvals and later vectors; server-side authorization applies to every data path. Run the personal pilot entirely on the user's PC: one local FastAPI/ADK process bound to `127.0.0.1`, an optional local worker, and an OS scheduler for polling while the PC is on. No Google Cloud deployment, Vertex AI, public webhook or hosted collector is required.
 
-**Tech Stack:** Python, Google ADK, Gemini, FastAPI, PostgreSQL/pgvector, a server-rendered HTML interface (Jinja/HTMX; a React SPA is deferred to the shared-team phase), and Google Cloud hosting for the unattended collector and pilot.
+**Tech Stack:** Python, Google ADK, Gemini API via a local `GEMINI_API_KEY` (or another configured local/provider model), FastAPI, local PostgreSQL/pgvector, a server-rendered HTML interface (Jinja/HTMX), and local environment/OS credential storage. A React SPA, Vertex AI, hosted deployment and shared-team operation are out of scope.
 
 **Spec:** [Product requirements and architecture](../specs/2026-09-27-scrum-master-agent-design.md). The preceding design review identified reporting, synchronization, permission and evaluation gaps; their resolution is assigned below.
 
@@ -15,11 +15,11 @@
 - Planning assumption: one developer with basic Python/web experience, working 10–12 hours per week. Twelve delivery weeks represent approximately 120–144 hours, not a guaranteed completion date. Learning ADK/Jira, access approvals and unexpected API behavior can extend this.
 - Weeks are relative to your actual start. No calendar dates, Jira issues or scheduled reminders are created by this plan.
 - First release is a personal pilot with one allowlisted user, one Jira site, one explicitly supported Scrum board and its required project scope. Jira Cloud remains provisional until Week 1 confirms it.
-- Shared-team onboarding/OAuth administration is a separate extension. This intentionally narrows the original multi-user requirement for the first release; it does not claim that the personal pilot completes shared-team support.
+- Shared-team onboarding/OAuth administration is out of scope. Re-open the design only if the personal PC pilot later needs multiple users.
 - Each week has one outcome, a small task list, a Friday demo and an exit check. Finish an incomplete dependency before starting the next week that needs it.
 - At 4–6 hours/week, initially spread each delivery week across two calendar weeks. At 20+ hours/week, combine weeks only after their exit checks pass; observing real sprint boundaries still takes calendar time.
 - Budget 7–8 hours for the main deliverable, 2 hours for verification/demo and 1–2 hours for rework or learning. Re-estimate after Week 2 using actual throughput.
-- Reserve two to four contingency weeks beyond the twelve — more if ADK and Google Cloud are new to you. Treat them as planned buffer: carry unfinished correctness work into them rather than weakening exit checks.
+- Reserve two to four contingency weeks beyond the twelve — more if ADK, Jira APIs or local PostgreSQL are new to you. Treat them as planned buffer: carry unfinished correctness work into them rather than weakening exit checks.
 
 ## Global constraints
 
@@ -31,6 +31,7 @@ The following constraints are carried from the design:
 - “Do not expose unrestricted HTTP, SQL or arbitrary code execution to the model.”
 - “Estimates, priority, assignee and sprint placement remain explicit human choices.”
 - “Store timestamps in UTC and render in the configured team timezone.”
+- “Bind the web interface to `127.0.0.1`; do not expose the PC-only pilot to a LAN or the internet.”
 
 No phase includes bulk writes, issue deletion, sprint administration, autonomous prioritization or individual performance scoring. Evidence and permissions are release requirements, including for the personal pilot.
 
@@ -39,7 +40,7 @@ No phase includes bulk writes, issue deletion, sprint administration, autonomous
 | Failure mode from the review | Owning week and required check |
 |---|---|
 | Done-before-start, reopening and closure-time rollover distort completion | Week 1 defines the rules; Week 6 checks event fixtures and one manually reviewed sprint. |
-| Missed events, lagging search and expired webhook subscriptions create false completeness | Week 4 checks recovery/checkpoints; Week 6 prevents an incomplete report from becoming final. |
+| Missed polling windows and lagging search create false completeness | Week 4 checks recovery/checkpoints; Week 6 prevents an incomplete report from becoming final. |
 | Revoked access remains visible in history, exports or model context | Week 2 establishes checks; Weeks 3, 5 and 10 exercise chat, report and retrieval paths. |
 | Board filters span projects or project types differ | Week 1 records supported configuration; Week 2 tests the actual board scope. |
 | No-match queries or missing ticket details cause invented answers | Week 3 checks abstention; Week 7 checks questions instead of invented requirements; Week 12 reruns both. |
@@ -47,7 +48,7 @@ No phase includes bulk writes, issue deletion, sprint administration, autonomous
 | Report generation blocks the conversation and times out | Week 5 makes report generation asynchronous with a job handle and status tool. |
 | A timed-out create leaves an unknown duplicate ticket | Week 8 writes a correlation marker and reconciles by search before declaring unknown. |
 | Collector credentials expire silently | Week 1 records the token-versus-3LO decision; Week 4 monitors credential expiry as a collection-freshness alarm. |
-| Webhook setup presumes an authentication method the pilot may not use | Week 1's decision selects the Week 4 webhook branch; scheduled polling with stated limitations is the fallback. |
+| A stopped PC creates collection gaps | Reports record freshness and gaps; scheduled polling is the only pilot synchronization mechanism. |
 
 ## Phase overview
 
@@ -57,7 +58,6 @@ No phase includes bulk writes, issue deletion, sprint administration, autonomous
 | 2. Reliable sprint reporting | 4–6 | Generate current and evidence-supported historical reports with clear freshness and limitations. |
 | 3. Ticket preparation and controlled changes | 7–9 | Draft, review, create and update individual tickets using your team's rules. |
 | 4. Semantic search and personal pilot | 10–12 | Find related work and use the integrated assistant in daily Scrum Master work. |
-| 5. Shared-team extension, optional | 13–16, re-estimate after pilot | Multiple people use their own identities with verified isolation. |
 
 ## Proposed module boundaries
 
@@ -80,8 +80,8 @@ These are future paths to guide implementation; this planning task does not crea
 
 **Weekly goal:** “I can run the project and retrieve a known ticket and my board configuration.”
 
-- [ ] Confirm Jira deployment, personal-pilot scope, board type, project scope, estimate field, timezone and permitted Google Cloud region/budget. If Data Center is selected, revise the adapter plan before continuing. *(Cloud, pilot project and timezone recorded in ADR-0001. Board type/filter scope and estimate field remain unverified; asia-east2 still needs org-policy approval and a budget cap remains unset.)*
-- [x] Decide pilot authentication by comparing the options accurately: a scoped personal API token (per-token scopes, selectable 1–365 day expiry, central `api.atlassian.com/ex/jira/{cloudId}` endpoints) versus OAuth 3LO from the start. The shared-team phase requires 3LO; building it early avoids a collector migration. Either way, add expiry monitoring for the unattended collector. *(Decided: scoped personal token — ADR-0001.)*
+- [x] Confirm Jira deployment, personal-pilot scope, board type, project scope, estimate field and timezone. If Data Center is selected, revise the adapter plan before continuing. *(Jira Cloud, project GACD, board 23031, filter scope, Story Points field and Asia/Hong_Kong timezone are recorded in ADR-0001. No hosting region or cloud budget is required for the PC-only pilot.)*
+- [x] Decide pilot authentication: use a scoped personal API token (selectable 1–365 day expiry, central `api.atlassian.com/ex/jira/{cloudId}` endpoints) and monitor expiry. OAuth 3LO is out of scope for the PC-only pilot. *(Decided: scoped personal token — ADR-0001.)*
 - [ ] Collect three representative ticket examples and one manually prepared sprint report; record current report preparation time as a baseline. Anonymize the examples before they become fixtures. *(Templates ready in `docs/samples/`; collection pending.)*
 - [x] Set up minimal CI (lint and tests) and pre-commit secret scanning; no credential ever enters source control. *(GitHub Actions + pre-commit with gitleaks.)*
 - [ ] Set up the Python application, configuration and a typed Jira connection; fetch one known issue and board metadata without exposing credentials. *(Implemented and regression-tested. Live recheck on 2026-09-27: known issue succeeds; board and board-configuration endpoints both return 401. Check granular read scopes/board permissions, then rerun `python -m scrum_agent`. See the Week 1 verification note.)*
@@ -122,20 +122,20 @@ These are future paths to guide implementation; this planning task does not crea
 
 ## Week 4 — Collect sprint history continuously
 
-**Weekly goal:** “My sprint data continues to be collected when my laptop is off.”
+**Weekly goal:** “My sprint data is collected reliably while my local collector is running.”
 
 - [ ] Add PostgreSQL migrations for snapshots, issue events, board configuration and ingestion checkpoints.
-- [ ] Enable automated backups when the database is introduced. Persistent ADK sessions (DatabaseSessionService, user-isolated) are also due here, but they are this week's first deferrable item: if the week runs long, keep Week 3's short-lived conversations and move sessions into the contingency buffer rather than compressing collection reliability.
-- [ ] Deploy a minimal private collector on the approved cloud setup: one Cloud Run service plus a Cloud Scheduler idempotent reconciliation endpoint; the Cloud Tasks queue arrives in Week 5 when asynchronous reports need it. Implement webhook ingestion per the Week 1 authentication choice — OAuth-app webhooks with signed JWT bearer validation under 3LO; administrator-configured webhooks with `X-Hub-Signature` HMAC validation for a token pilot with admin rights; otherwise scheduled polling only, with stated history limitations — and give the webhook endpoint authenticated public ingress while scheduler, application and write endpoints keep separate access controls. Webhooks are hints only; include webhook renewal if dynamic subscriptions are used.
+- [ ] Configure local PostgreSQL backups and persistent ADK sessions (user-isolated). Use the PC's backup tooling; test restoring the database and application state.
+- [ ] Run a local collector/worker and an idempotent reconciliation command. Configure cron or Windows Task Scheduler only if unattended polling while the PC is on is useful. Do not implement public webhooks in the PC-only pilot; scheduled polling is the authoritative freshness mechanism.
 - [ ] Monitor credential expiry: an expiring or expired token must surface as a collection-freshness alarm, not as silent gaps in history.
-- [ ] Deduplicate events, checkpoint all-page ingestion and recover from interruption. Treat webhook events as hints and reconcile against authoritative data.
-- [ ] Record sync freshness, gaps and configuration versions. Set an initial target of a successful reconciliation every 15 minutes; represent this as collection freshness, not proof that Jira indexing has no lag.
+- [ ] Deduplicate events, checkpoint all-page ingestion and recover from interruption. Treat polling results as hints and reconcile against authoritative data.
+- [ ] Record sync freshness, gaps and configuration versions. Set a practical local polling interval and represent it as collection freshness, not proof that Jira indexing has no lag.
 
 **Friday demo:** Change a sandbox ticket, show its persisted history, stop/restart the collector and demonstrate recovery.
 
-**Done when:** Collection runs unattended for 48 hours, replayed events do not duplicate history, outages are visible and the recovery path has been exercised.
+**Done when:** Collection runs reliably during a representative working session, replayed events do not duplicate history, stopped-process gaps are visible and the recovery path has been exercised.
 
-**Scope rule:** Keep the hosted surface to the collector and required endpoints. The essential outcome is reliable unattended collection; every other task added this week defers to it, persistent sessions first. A missed snapshot must create a completeness warning. If cloud access is delayed, use an approved always-on host or extend this week; laptop-only collection cannot meet this goal.
+**Scope rule:** Keep all components local. The essential outcome is reliable collection while the PC is running; every other task added this week defers to it, persistent sessions first. A missed snapshot must create a completeness warning. Do not add cloud deployment, public ingress or webhook registration to this pilot.
 
 ## Week 5 — Generate a useful current-sprint report
 
@@ -144,7 +144,7 @@ These are future paths to guide implementation; this planning task does not crea
 - [ ] Calculate current scope, status counts, configured estimates and explicit blockers in Python/SQL using a persisted set of report inputs.
 - [ ] Generate a short narrative with issue references, Sprint Goal, impediments and decisions needed. Goal achievement stays human-confirmed or unknown.
 - [ ] Add report selection/view and Markdown/CSV export, including freshness, estimate coverage and completeness labels. Sanitize CSV cells beginning with `=`, `+`, `-` or `@` and escape rendered markup.
-- [ ] Make report generation asynchronous: `build_sprint_report` returns a job handle with an estimate and a `get_report` tool reports status and results; no blocking tool call in the conversation loop. Execute jobs durably with a Cloud Tasks queue targeting the same Cloud Run service: persist job state in PostgreSQL, and enforce idempotency in the application through persisted job identity and execution state. Verify both an instance restart and a duplicate delivery — Cloud Tasks is at-least-once.
+- [ ] Make report generation asynchronous: `build_sprint_report` returns a job handle with an estimate and a `get_report` tool reports status and results; no blocking tool call in the conversation loop. Execute jobs with a local worker and durable PostgreSQL job state; enforce idempotency through persisted job identity and execution state. Verify both an application restart and duplicate local delivery.
 - [ ] Revalidate access for every contributing issue before generation/export; check historical/cache paths as well as live search. Exclude unauthorized data from both details and totals.
 
 **Friday demo:** Generate a report for your board, verify totals manually and export the same authorized result.
@@ -238,9 +238,9 @@ These are future paths to guide implementation; this planning task does not crea
 
 **Weekly goal:** “I can use the integrated assistant for a working week and judge its practical value.”
 
-- [ ] Deploy the integrated personal app behind authentication and a single-user allowlist, with persistent sessions already enabled (Week 4, or the contingency buffer if Week 4 deferred them). Keep secrets outside the app image and configure cost/error visibility.
+- [ ] Run the integrated personal app locally with a single-user allowlist and persistent sessions. Keep secrets outside source control and configure local logs/error visibility.
 - [ ] Run search, reporting, drafting, creation and update scenarios; rerun permission, approval, model-behavior and export-injection checks against the pinned release configuration.
-- [ ] Re-verify backup/restore and failure recovery (first exercised in Week 8) against the deployed configuration; document setup and operating steps.
+- [ ] Re-verify backup/restore and failure recovery (first exercised in Week 8) against the local configuration; document setup and operating steps.
 - [ ] Use the app during a working week, record defects and report-preparation time, and prioritize the next backlog from observed friction.
 
 **Friday demo:** Complete a realistic workflow from finding issues through generating a report and reviewing a ticket change.
@@ -249,31 +249,25 @@ These are future paths to guide implementation; this planning task does not crea
 
 **Milestone:** Personal MVP release candidate. The proposed 50% report-time reduction requires observation over several real sprints; Week 12 establishes initial evidence and does not claim that longer-term outcome is already proven.
 
-## Optional Phase 5 — Shared-team operation
+## Out of scope after the personal pilot
 
-Re-estimate after the personal pilot; reserve an initial four weekly slots if shared use is wanted.
-
-| Week | Goal | Exit check |
-|---|---|---|
-| 13 | Separate application identity from each user's Jira OAuth connection | Two users connect independently; refresh, revocation and reconnect are handled without mixing credentials. |
-| 14 | Isolate data and context across users | Cross-user tests cover issue security, sessions, historical reports, exports, approvals and retrieval; inaccessible data never enters another user's model context. |
-| 15 | Operate multiple boards and team policies | Team admins configure supported boards/templates without granting Jira access; polling, retention, quotas and webhook registrations handle the agreed team scope. |
-| 16 | Validate a small shared pilot | Multiple users complete representative workflows; load/cost observations and access tests meet the agreed release criteria. |
-
-Confluence ingestion, scheduled report distribution, chat integrations and retrospective-action tracking remain separate backlog items. Each requires its own weekly goal and authorization model when prioritized.
+Shared-team identity, OAuth 3LO, multi-user isolation, hosted deployment, public
+webhooks, Confluence ingestion, scheduled report distribution, chat integrations and
+retrospective-action tracking are not part of this PC-only roadmap. Re-open the design
+and create a new delivery plan only if shared use becomes a requirement.
 
 ## Requirement coverage
 
 | Requirement | Delivery |
 |---|---|
-| FR-01 connection and context | Weeks 1–3 personal scope; Weeks 13–15 shared scope |
+| FR-01 connection and context | Weeks 1–3 personal scope |
 | FR-02 natural-language Jira search | Weeks 2–3 |
 | FR-03 related work | Weeks 10–11 |
 | FR-04 selected-sprint reports | Weeks 5–6; real-history check depends on evidence availability |
 | FR-05 ticket drafts, including related examples | Week 7, enhanced in Week 11 |
 | FR-06 reviewed updates | Week 9 |
 | FR-07 approved execution | Weeks 8–9 |
-| FR-08 team standards | Week 7 versioned templates; Week 15 shared administration |
+| FR-08 team standards | Week 7 versioned templates |
 | FR-09 provenance | Sources from Week 2; historical inputs Week 4; report provenance Weeks 5–6; write audit Weeks 8–9 |
 | FR-10 report exports | Week 5 |
 

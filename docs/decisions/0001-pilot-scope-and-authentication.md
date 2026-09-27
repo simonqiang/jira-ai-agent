@@ -6,18 +6,17 @@ Supersedes: provisional assumptions in spec §1.
 ## Context
 
 The roadmap's Week 1 requires confirming the Jira deployment, pilot authentication,
-report timezone and permitted Google Cloud region before the collector (Week 4) and
-reports (Week 5) are built on them.
+report timezone and board context before local collection and reports are built on them.
 
 ## Decision
 
 | Item | Decision | Notes |
 |---|---|---|
 | Jira deployment | **Jira Cloud** | REST v3 + Jira Software board APIs as designed. |
-| Pilot authentication | **Scoped personal API token** | Self-service, per-token scopes, selectable expiry; recommended pilot expiry ≤ 90 days. OAuth 3LO is required by the shared-team phase — the client isolates auth in `Settings`, so 3LO adds a token-refresh path rather than a rewrite. |
+| Pilot authentication | **Scoped personal API token** | Self-service, per-token scopes, selectable expiry; recommended pilot expiry ≤ 90 days. OAuth 3LO is out of scope for the PC-only pilot. |
 | Auth endpoints | Token type selects the base URL | Scoped tokens must use `api.atlassian.com/ex/jira/{cloudId}`; the client supports `basic_site`, `basic_central`, `bearer_central`. |
 | Report timezone | **Asia/Hong_Kong** | Stored UTC, rendered local (spec §10). |
-| Google Cloud region | **asia-east2 (Hong Kong)**, pending org-policy confirmation | Only Week 4+ deployments depend on it. |
+| Application runtime | **User's PC** | No Google Cloud deployment, public webhook or hosted collector is required for the personal pilot. |
 | Credential monitoring | Required from Week 4 | Expiring/expired tokens surface as a collection-freshness alarm, not silent gaps. |
 
 ## Remaining Week 1 inputs (owner: pilot user)
@@ -29,8 +28,9 @@ reports (Week 5) are built on them.
   no cross-project leakage. Estimation is a field: `customfield_10033` (Story Points);
   done-status ID **10114** from the board's column mapping.
 - Three anonymized ticket examples and one sprint-report baseline (`docs/samples/`).
-- Organization-policy approval for the proposed region and a provisional monthly
-  budget ceiling (refine with Week 3 model-call measurements).
+- Model provider choice and API/privacy terms (if using Gemini remotely) or local
+  model runtime requirements. Measure provider cost or local compute instead of
+  setting a Google Cloud hosting budget.
 - Token hygiene: confirm the token value exposed in a chat session on 2026-09-27 was
   revoked in Atlassian's API-token page.
 
@@ -73,6 +73,6 @@ present (contrary to the interim hypothesis that they could not).
 ### Implementation implications
 
 - Week 1 probe and Week 2 search run against the pilot user's own token; permissions are
-  Jira-native for live reads.
-- Migration to 3LO (shared-team phase or earlier if desired) is an auth-module change plus
-  per-user token storage, not an adapter redesign.
+  Jira-native for live reads. The application and any local worker run on the user's PC.
+- Migration to 3LO, public webhooks or hosted multi-user operation is explicitly out of
+  scope for this pilot and would require a new design decision.
