@@ -4,6 +4,14 @@ The spec requires three representative ticket examples and one manually prepared
 report as a baseline, **anonymized before they become fixtures** (no colleague names,
 customer data, credentials or real issue keys — see spec §11).
 
+## Status (2026-09-27)
+
+Filled examples drafted from real pilot-project tickets, paraphrased and anonymized:
+[story](story.example.md) · [bug](bug.example.md) · [task](task.example.md). Each ends
+with observations that seed the Week 7 templates. Remaining: pilot-user review of the
+three examples, and the [manual sprint-report baseline](sprint-report-baseline.md) with
+the real preparation time — the one input that cannot be synthesized.
+
 ## What to collect
 
 1. **Three ticket examples** — one Story, one Bug, one Task from the supported board.
