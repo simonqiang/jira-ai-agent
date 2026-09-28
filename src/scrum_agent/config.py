@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import base64
 import re
+from typing import ClassVar
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -33,6 +35,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         hide_input_in_errors=True,
+        protected_namespaces=("settings_",),  # 'model_*' fields are provider config
     )
 
     jira_site: str = Field(min_length=1)
@@ -45,6 +48,18 @@ class Settings(BaseSettings):
     known_issue_key: str = Field(pattern=r"^[A-Z][A-Z0-9_]*-[1-9][0-9]*$")
     report_timezone: str = "Asia/Hong_Kong"
 
+    # Week 3: conversational agent and local web UI. Model settings are optional
+    # so probe/sprints/search keep working without them; chat features validate
+    # through require_model_settings() at startup instead.
+    model_name: str | None = None
+    model_api_key: SecretStr | None = None
+    model_base_url: str = "https://api.z.ai/api/anthropic"
+    model_max_tokens: int = Field(default=8192, ge=1024, le=32768)
+    web_host: str = "127.0.0.1"
+    web_port: int = Field(default=8741, ge=1, le=65535)
+
+    LOOPBACK_HOSTS: ClassVar[tuple[str, ...]] = ("127.0.0.1", "::1", "localhost")
+
     @field_validator(
         "jira_site",
         "jira_user_email",
@@ -53,6 +68,9 @@ class Settings(BaseSettings):
         "jira_project_key",
         "jira_cloud_id",
         "report_timezone",
+        "model_name",
+        "model_base_url",
+        "web_host",
         mode="before",
     )
     @classmethod
@@ -103,6 +121,37 @@ class Settings(BaseSettings):
             )
         return value
 
+    @field_validator("model_api_key", "model_name")
+    @classmethod
+    def _model_optional_not_blank(cls, value: object) -> object:
+        if isinstance(value, SecretStr):
+            if not value.get_secret_value().strip():
+                raise ValueError("must not be blank")
+            return value
+        if isinstance(value, str) and not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+    @field_validator("model_base_url")
+    @classmethod
+    def _model_base_url_is_https(cls, value: str) -> str:
+        parsed = urlparse(value)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ValueError("model_base_url must be an https:// URL")
+        if parsed.query or parsed.fragment or value.endswith("/"):
+            raise ValueError("model_base_url must not carry a query, fragment or trailing slash")
+        return value
+
+    @field_validator("web_host")
+    @classmethod
+    def _web_host_is_loopback(cls, value: str) -> str:
+        if value not in Settings.LOOPBACK_HOSTS:
+            raise ValueError(
+                f"web_host must be one of {Settings.LOOPBACK_HOSTS} "
+                "(the pilot binds to loopback only)"
+            )
+        return value
+
     @model_validator(mode="after")
     def _check_auth_mode(self) -> Settings:
         if self.jira_auth_mode not in AuthMode.ALL:
@@ -129,3 +178,24 @@ class Settings(BaseSettings):
         raw = f"{self.jira_user_email}:{self.jira_api_token.get_secret_value()}".encode()
         encoded = base64.b64encode(raw).decode()
         return {"Authorization": f"Basic {encoded}"}
+
+
+def require_model_settings(settings: Settings) -> None:
+    """Fail fast for chat features that need a live model.
+
+    probe/sprints/search never call this, so the Week 1-2 CLI keeps working on a
+    Jira-only environment.
+    """
+    missing = [
+        name
+        for name, value in (
+            ("SCRUM_AGENT_MODEL_NAME", settings.model_name),
+            ("SCRUM_AGENT_MODEL_API_KEY", settings.model_api_key),
+        )
+        if value is None
+    ]
+    if missing:
+        raise ValueError(
+            f"chat features require {' and '.join(missing)} in the environment or .env "
+            "(see .env.example)"
+        )

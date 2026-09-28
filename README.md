@@ -6,10 +6,10 @@ sprint reports and preparing clear Jira tickets. Design and weekly roadmap:
 - [Product requirements and architecture](docs/superpowers/specs/2026-09-27-scrum-master-agent-design.md)
 - [Weekly implementation roadmap](docs/superpowers/plans/2026-09-27-weekly-delivery-roadmap.md)
 
-Status: **Week 2 — typed search implemented; live demo pending**. Week 1's live issue
-and board reads work for board 23031 (anonymized examples and the report baseline still
-pending). Week 2 adds sprint selection, typed filters, centralized pilot-scope checks
-and a checked query set — verified against mocked Jira; see the
+Status: **Week 3 — local read-only conversational agent in implementation**. Week 1's
+live issue and board reads work for board 23031. Week 2 adds sprint selection, typed
+filters, centralized pilot-scope checks and a checked query set — verified against
+mocked Jira; see the
 [Week 2 note](docs/superpowers/notes/2026-09-27-week-2.md) and the
 [Week 1 note](docs/superpowers/notes/2026-09-27-week-1.md).
 
@@ -125,6 +125,37 @@ Week 2 exit checks live in `tests/checked_queries.py` (empty results, ambiguous
 sprint names, multi-page collection, cross-project/cross-board leakage); Week 3's
 agent must answer the same set.
 
+### Local chat (Week 3)
+
+Set `SCRUM_AGENT_MODEL_NAME` and `SCRUM_AGENT_MODEL_API_KEY` in `.env` (the
+configured endpoint must be HTTPS), then run:
+
+```bash
+scrum-agent serve
+```
+
+The server binds to `127.0.0.1` by default and rejects non-loopback host
+configuration. It exposes a short-lived, single-user browser chat at
+`http://127.0.0.1:8741`; restarting it or choosing **New conversation** clears
+context. The agent has only typed Jira read tools. It cannot create, edit,
+transition or delete Jira issues, and all results continue through `PilotScope`.
+
+Each answer shows server-verified Jira source links and per-turn model usage.
+Before using real issue content with a provider, review its privacy and retention
+terms. `SCRUM_AGENT_MODEL_BASE_URL` defaults to an Anthropic-compatible endpoint;
+change it only to the HTTPS API root for the selected compatible provider.
+
+To measure a live-model cost baseline against the checked intents, run:
+
+```bash
+scrum-agent baseline
+```
+
+It writes a sanitized JSON result under `docs/superpowers/notes/`. Token counts
+are recorded when the provider returns usage metadata; provider cost stays
+explicitly unknown until pricing is configured, and the command never treats an
+unknown value as zero cost.
+
 ## Layout
 
 ```
@@ -137,6 +168,8 @@ src/scrum_agent/         application package
   jira/errors.py         typed errors (auth/permission/not-found/rate-limit)
   search/filters.py      typed filters compiled to quoted, project-scoped JQL
   search/service.py      issue lookup, sprint selection and search results
+  agent/                 narrow read-only ADK tools, chat runner and usage tracking (Week 3)
+  web/                   loopback-only FastAPI/Jinja chat UI (Week 3)
   search/errors.py       ambiguity/not-found errors that prompt, not guess
 tests/                   unit tests against a mocked transport
 tests/checked_queries.py the Week 2 checked query set + fixture Jira server
