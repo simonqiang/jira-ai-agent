@@ -24,11 +24,31 @@ from scrum_agent.jira.errors import (
     JiraPermissionError,
     JiraRateLimitedError,
 )
-from scrum_agent.jira.models import Board, BoardConfiguration, Issue, Sprint
+from scrum_agent.jira.models import (
+    Board,
+    BoardConfiguration,
+    ChangelogEntry,
+    Issue,
+    Sprint,
+)
 
 _T = TypeVar("_T")
 
 _SEARCH_FIELDS = ["summary", "status", "issuetype", "assignee", "updated"]
+
+# Curated field list for the collector's authoritative per-issue read; the
+# board-specific estimate field is appended per run via extra_fields.
+_ISSUE_DETAIL_FIELDS = [
+    "summary",
+    "status",
+    "issuetype",
+    "assignee",
+    "updated",
+    "created",
+    "resolution",
+    "labels",
+    "sprint",
+]
 
 _SPRINT_STATES = ("future", "active", "closed")
 
@@ -150,6 +170,62 @@ class JiraClient:
         return self._parse_response(
             Board.from_api, self._request("GET", f"/rest/agile/1.0/board/{board_id}")
         )
+
+    def get_issue_detail(
+        self, issue_key: str, *, extra_fields: Sequence[str] = ()
+    ) -> dict[str, Any]:
+        """Authoritative issue read for collection: curated fields, raw payload.
+
+        Returns the raw response so the collector can persist the ``fields``
+        object verbatim (the board-specific estimate field id arrives via
+        ``extra_fields``). The returned key is re-checked so a moved issue
+        cannot smuggle an out-of-scope payload in.
+        """
+        self._check_issue_scope(issue_key)
+        fields = [*_ISSUE_DETAIL_FIELDS, *extra_fields]
+        payload = self._request(
+            "GET",
+            f"/rest/api/3/issue/{issue_key}",
+            params={"fields": ",".join(fields)},
+        )
+        key = payload.get("key") if isinstance(payload, dict) else None
+        if not isinstance(key, str) or not key:
+            raise JiraApiError("Jira returned an issue without a key")
+        self._check_issue_scope(key)
+        return payload
+
+    def iter_issue_changelog(
+        self,
+        issue_key: str,
+        *,
+        max_results_per_page: int = 100,
+        max_pages: int = 20,
+    ) -> Iterator[ChangelogEntry]:
+        """Iterate an issue's changelog, following startAt/isLast pagination.
+
+        Mirrors the sprint-listing contract: malformed pages fail closed and a
+        page cap fails loudly instead of truncating history silently.
+        """
+        self._check_issue_scope(issue_key)
+        start_at = 0
+        for _ in range(max_pages):
+            payload = self._request(
+                "GET",
+                f"/rest/api/3/issue/{issue_key}/changelog",
+                params={"startAt": start_at, "maxResults": max_results_per_page},
+            )
+            values = payload.get("values")
+            is_last = payload.get("isLast")
+            if not isinstance(values, list) or not isinstance(is_last, bool):
+                raise JiraApiError("Jira returned an invalid changelog page")
+            for item in values:
+                yield self._parse_response(ChangelogEntry.from_api, item)
+            if is_last:
+                return
+            if not values:
+                raise JiraApiError("Jira returned an incomplete changelog page without values")
+            start_at += len(values)
+        raise JiraApiError(f"Changelog listing exceeded {max_pages} pages; raise the limit")
 
     def get_board_configuration(self, board_id: int) -> BoardConfiguration:
         self._check_board_scope(board_id)

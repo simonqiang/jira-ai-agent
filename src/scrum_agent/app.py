@@ -73,6 +73,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="output path for the JSON artifact (default: docs notes directory)",
     )
 
+    subparsers.add_parser(
+        "migrate", help="apply pending SQL migrations to the local database (Week 4)"
+    )
+
     args = parser.parse_args(argv)
     if args.command is None:
         args.command = "probe"
@@ -254,6 +258,31 @@ def _baseline(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _migrate(settings: Settings) -> int:
+    """Apply pending storage migrations; idempotent."""
+    import psycopg
+
+    from scrum_agent.config import require_database_settings
+    from scrum_agent.storage.db import connect, run_migrations
+
+    try:
+        require_database_settings(settings)
+    except ValueError as error:
+        print(f"Configuration error - {error}", file=sys.stderr)
+        return 2
+    try:
+        with connect(settings) as conn:
+            applied = run_migrations(conn)
+    except psycopg.Error as error:
+        print(f"Database error: {error}", file=sys.stderr)
+        return 1
+    if applied:
+        print(f"Applied {len(applied)} migration(s): {', '.join(applied)}")
+    else:
+        print("Database schema is up to date.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     logging.basicConfig(
@@ -280,6 +309,8 @@ def main(argv: list[str] | None = None) -> int:
             return _serve(settings)
         if args.command == "baseline":
             return _baseline(settings, args)
+        if args.command == "migrate":
+            return _migrate(settings)
         return _probe(settings)
     except AmbiguousSprintError as error:
         print(f"Jira error: {error}", file=sys.stderr)

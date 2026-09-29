@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict
+
+
+def parse_jira_time(value: str) -> datetime:
+    """Parse a Jira timestamp (e.g. 2026-09-27T08:00:00.000+0000) as aware UTC."""
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        raise ValueError(f"Jira timestamp without an offset: {value!r}")
+    return parsed
 
 
 class _Model(BaseModel):
@@ -32,6 +42,46 @@ class Issue(_Model):
             issue_type=issue_type.get("name") or "Unknown",
             assignee=assignee.get("displayName"),
             updated=fields.get("updated"),
+        )
+
+
+class ChangelogItem(_Model):
+    """One field change within a changelog entry (items carry no id of their own)."""
+
+    field: str
+    field_id: str | None = None
+    from_id: str | None = None
+    from_value: str | None = None
+    to_id: str | None = None
+    to_value: str | None = None
+
+    @classmethod
+    def from_api(cls, payload: dict) -> ChangelogItem:
+        return cls(
+            field=payload["field"],
+            field_id=payload.get("fieldId"),
+            from_id=payload.get("from"),
+            from_value=payload.get("fromString"),
+            to_id=payload.get("to"),
+            to_value=payload.get("toString"),
+        )
+
+
+class ChangelogEntry(_Model):
+    """One dated changelog event: identity, author, when, and the item changes."""
+
+    id: str
+    created: datetime
+    author: str | None = None
+    items: tuple[ChangelogItem, ...]
+
+    @classmethod
+    def from_api(cls, payload: dict) -> ChangelogEntry:
+        return cls(
+            id=str(payload["id"]),
+            created=parse_jira_time(payload["created"]),
+            author=(payload.get("author") or {}).get("displayName"),
+            items=tuple(ChangelogItem.from_api(item) for item in payload.get("items") or []),
         )
 
 
