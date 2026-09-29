@@ -326,6 +326,7 @@ def test_collect_runs_collector_and_prints_freshness(monkeypatch, capsys) -> Non
     assert app.main(["collect"]) == 0
     out = capsys.readouterr().out
     assert "Collected 6 issue(s)" in out
+    assert "7 Jira page(s)" in out
     assert "never succeeded" not in out
     assert len(storage.snapshots) == 6
     assert storage.checkpoints["issues"]

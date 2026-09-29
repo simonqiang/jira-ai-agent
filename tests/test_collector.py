@@ -78,6 +78,22 @@ def test_full_ingest_writes_snapshots_events_and_board_config() -> None:
     assert pay1["assignee"] == "A. Developer"
     assert len(storage.board_configs) == 1
     assert storage.checkpoints["issues"]["last_success_at"] == _START
+    # One search page plus one complete changelog page for each reconciled issue.
+    assert storage.runs[-1]["pages_fetched"] == 7
+
+
+def test_pages_fetched_counts_each_paginated_changelog_response() -> None:
+    collector, jira, storage, _ = make_collector()
+    jira.changelogs["PAY-1"] = [
+        entry(str(9000 + index), "2026-09-20T10:30:00.000+0000", [status_item("To Do", "Done")])
+        for index in range(101)
+    ]
+
+    collector.run()
+
+    # One JQL page, two changelog pages for PAY-1, and one page for each of
+    # the remaining five issue changelogs.
+    assert storage.runs[-1]["pages_fetched"] == 8
 
 
 def test_event_rows_carry_field_provenance() -> None:
@@ -229,3 +245,25 @@ def test_rate_limit_is_retried_with_retry_after() -> None:
     assert summary["status"] == "success"
     assert attempts["count"] == 2
     assert storage.freshness()["live_issues"] == 6
+
+
+def test_rate_limit_during_changelog_iteration_is_retried() -> None:
+    jira = FakeJira()
+    inner = jira.handler
+    attempts = {"count": 0}
+
+    def flaky(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/issue/PAY-1/changelog"):
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                return httpx.Response(429, json={}, headers={"Retry-After": "0"})
+        return inner(request)
+
+    jira.handler = flaky
+    collector, _, storage, _ = make_collector(jira)
+
+    summary = collector.run()
+
+    assert summary["status"] == "success"
+    assert attempts["count"] == 2
+    assert storage.runs[-1]["pages_fetched"] == 7

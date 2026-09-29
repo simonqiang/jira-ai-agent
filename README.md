@@ -181,7 +181,8 @@ Notes:
 - Events are deduped on (issue, changelog entry, item position), so replaying a
   run never duplicates history. A crashed run stays visible as `interrupted`
   and the next run resumes cleanly; only a successful run advances the
-  checkpoint.
+  checkpoint. Successful run records include `pages_fetched`, counting the
+  paginated JQL-search and changelog responses used by the collector.
 - An issue that 404s or becomes inaccessible is tombstoned (`deleted_at`), not
   silently dropped — visible gaps, not silent ones.
 - `SCRUM_AGENT_TOKEN_EXPIRES_ON` (ISO date) drives the credential-freshness

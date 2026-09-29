@@ -58,24 +58,29 @@ class CollectorService:
         issues_seen = 0
         events_seen = 0
         try:
-            issues_seen, events_seen = self._collect(run_id, full=full)
+            issues_seen, events_seen, pages_fetched = self._collect(run_id, full=full)
             self._storage.set_checkpoint("issues", self._now(), run_id)
         except Exception as error:
             self._storage.finish_run(run_id, status="error", error=str(error))
             raise
         self._storage.finish_run(
-            run_id, status="success", issues_seen=issues_seen, events_seen=events_seen
+            run_id,
+            status="success",
+            issues_seen=issues_seen,
+            events_seen=events_seen,
+            pages_fetched=pages_fetched,
         )
         return {
             "run_id": run_id,
             "status": "success",
             "issues_seen": issues_seen,
             "events_seen": events_seen,
+            "pages_fetched": pages_fetched,
         }
 
     # -- internals -----------------------------------------------------------
 
-    def _collect(self, run_id: int, *, full: bool = False) -> tuple[int, int]:
+    def _collect(self, run_id: int, *, full: bool = False) -> tuple[int, int, int]:
         board_id = self._client.scope.board_id
         config = self._with_retry(lambda: self._client.get_board_configuration(board_id))
         self._record_board_config(run_id, config)
@@ -83,7 +88,13 @@ class CollectorService:
 
         issues_seen = 0
         events_seen = 0
-        for key in self._hinted_issue_keys(full=full):
+        pages_fetched = 0
+
+        def count_page() -> None:
+            nonlocal pages_fetched
+            pages_fetched += 1
+
+        for key in self._hinted_issue_keys(full=full, on_page=count_page):
             try:
                 detail = self._with_retry(
                     lambda key=key: self._client.get_issue_detail(
@@ -110,9 +121,11 @@ class CollectorService:
             )
             issues_seen += 1
 
-            entries = list(self._with_retry(lambda key=key: self._client.iter_issue_changelog(key)))
+            entries = self._with_retry(
+                lambda key=key: list(self._client.iter_issue_changelog(key, on_page=count_page))
+            )
             events_seen += self._storage.insert_events(issue_id, entry_rows(entries), run_id)
-        return issues_seen, events_seen
+        return issues_seen, events_seen, pages_fetched
 
     def _record_board_config(self, run_id: int, config: BoardConfiguration) -> None:
         """Version the board configuration; append only on an actual change."""
@@ -125,7 +138,9 @@ class CollectorService:
             board_id=config.id, config_hash=config_hash, config=config_payload, run_id=run_id
         )
 
-    def _hinted_issue_keys(self, *, full: bool = False) -> list[str]:
+    def _hinted_issue_keys(
+        self, *, full: bool = False, on_page: Callable[[], None] | None = None
+    ) -> list[str]:
         """Issue keys Jira reports as updated since the overlapped checkpoint."""
         last_success = None if full else self._storage.last_success()
         if last_success is None:
@@ -137,7 +152,10 @@ class CollectorService:
             jql = f'updated >= "{since:%Y-%m-%d %H:%M}"'
         keys: list[str] = []
         seen: set[str] = set()
-        for issue in self._client.iter_search_jql(jql, max_pages=100):
+        issues = self._with_retry(
+            lambda: list(self._client.iter_search_jql(jql, max_pages=100, on_page=on_page))
+        )
+        for issue in issues:
             if issue.key not in seen:
                 seen.add(issue.key)
                 keys.append(issue.key)

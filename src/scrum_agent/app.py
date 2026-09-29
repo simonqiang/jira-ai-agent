@@ -373,7 +373,8 @@ def _collect(settings: Settings, args: argparse.Namespace) -> int:
     scope = "full project scope" if args.full else "recent updates"
     print(
         f"Collected {summary['issues_seen']} issue(s) "
-        f"({summary['events_seen']} new event(s)) for {scope} "
+        f"({summary['events_seen']} new event(s)) across {summary['pages_fetched']} Jira page(s) "
+        f"for {scope} "
         f"[run {summary['run_id']}, status {summary['status']}]."
     )
     _print_freshness(report)

@@ -200,6 +200,7 @@ class JiraClient:
         *,
         max_results_per_page: int = 100,
         max_pages: int = 20,
+        on_page: Callable[[], None] | None = None,
     ) -> Iterator[ChangelogEntry]:
         """Iterate an issue's changelog, following startAt/isLast pagination.
 
@@ -218,6 +219,8 @@ class JiraClient:
             is_last = payload.get("isLast")
             if not isinstance(values, list) or not isinstance(is_last, bool):
                 raise JiraApiError("Jira returned an invalid changelog page")
+            if on_page is not None:
+                on_page()
             for item in values:
                 yield self._parse_response(ChangelogEntry.from_api, item)
             if is_last:
@@ -336,6 +339,7 @@ class JiraClient:
         *,
         max_results_per_page: int = 50,
         max_pages: int = 20,
+        on_page: Callable[[], None] | None = None,
     ) -> Iterator[Issue]:
         """Iterate issues matching JQL, following nextPageToken across all pages.
 
@@ -359,6 +363,8 @@ class JiraClient:
                 raise JiraApiError("Jira returned an invalid search page")
             if payload.get("isLast") is False and not next_token:
                 raise JiraApiError("Jira returned an incomplete search page without a next token")
+            if on_page is not None:
+                on_page()
             for item in items:
                 issue = self._parse_response(Issue.from_api, item)
                 self._check_issue_scope(issue.key)
