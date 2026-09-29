@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import re
+from datetime import date
 from typing import ClassVar
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -58,6 +59,12 @@ class Settings(BaseSettings):
     web_host: str = "127.0.0.1"
     web_port: int = Field(default=8741, ge=1, le=65535)
 
+    # Week 4: local collection storage and the credential-freshness alarm. Both
+    # are optional so Week 1-3 commands keep working without a database;
+    # storage commands validate through require_database_settings() instead.
+    database_url: str | None = None
+    token_expires_on: date | None = None
+
     LOOPBACK_HOSTS: ClassVar[tuple[str, ...]] = ("127.0.0.1", "::1", "localhost")
 
     @field_validator(
@@ -71,6 +78,7 @@ class Settings(BaseSettings):
         "model_name",
         "model_base_url",
         "web_host",
+        "database_url",
         mode="before",
     )
     @classmethod
@@ -142,6 +150,26 @@ class Settings(BaseSettings):
             raise ValueError("model_base_url must not carry a query, fragment or trailing slash")
         return value
 
+    @field_validator("database_url")
+    @classmethod
+    def _database_url_is_postgres(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.replace("postgres://", "postgresql://", 1)
+        parsed = urlparse(normalized)
+        if parsed.scheme != "postgresql" or not parsed.netloc:
+            raise ValueError("database_url must be a postgresql:// URL with a host")
+        return normalized
+
+    @field_validator("token_expires_on", mode="before")
+    @classmethod
+    def _blank_expiry_is_unset(cls, value: object) -> object:
+        # A past date stays a *valid* config: it produces an expired alarm, not
+        # a settings error. Jira has no API to read a token's expiry date.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("web_host")
     @classmethod
     def _web_host_is_loopback(cls, value: str) -> str:
@@ -198,4 +226,16 @@ def require_model_settings(settings: Settings) -> None:
         raise ValueError(
             f"chat features require {' and '.join(missing)} in the environment or .env "
             "(see .env.example)"
+        )
+
+
+def require_database_settings(settings: Settings) -> None:
+    """Fail fast for storage commands that need the local Postgres database.
+
+    probe/sprints/search/chat never call this, so they keep working without one.
+    """
+    if settings.database_url is None:
+        raise ValueError(
+            "storage commands require SCRUM_AGENT_DATABASE_URL in the environment or .env "
+            "(see .env.example; start the local database with `docker compose up -d`)"
         )
