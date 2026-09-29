@@ -1,4 +1,4 @@
-"""CLI for the personal pilot: probe, sprints and search (Weeks 1-2).
+"""CLI for the personal pilot: probe, sprints, search, serve and baseline.
 
 Prints sanitized summaries only (no credentials, no assignee names). Exit codes:
 0 success, 1 Jira/search error, 2 configuration or input error.
@@ -59,6 +59,19 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     search_parser.add_argument("--label", action="append", help="label (repeatable)")
     search_parser.add_argument("--unresolved", action="store_true", help="only unresolved issues")
+
+    subparsers.add_parser("serve", help="run the local chat web UI on 127.0.0.1 (Week 3)")
+
+    baseline_parser = subparsers.add_parser(
+        "baseline",
+        help="run the checked intents against the live model and record "
+        "model calls/tokens as the Week 3 cost baseline",
+    )
+    baseline_parser.add_argument(
+        "--out",
+        default=None,
+        help="output path for the JSON artifact (default: docs notes directory)",
+    )
 
     args = parser.parse_args(argv)
     if args.command is None:
@@ -194,6 +207,53 @@ def _search(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _serve(settings: Settings) -> int:
+    """Run the Week 3 chat UI; loopback-only by validated settings."""
+    import uvicorn
+
+    from scrum_agent.agent.chat import ChatService
+    from scrum_agent.web import create_app
+
+    try:
+        chat = ChatService(settings)
+    except ValueError as error:
+        print(f"Configuration error - {error}", file=sys.stderr)
+        return 2
+    print(
+        f"Serving the chat UI on http://{settings.web_host}:{settings.web_port} "
+        "(loopback only; Ctrl-C to stop)"
+    )
+    uvicorn.run(
+        create_app(settings, chat),
+        host=settings.web_host,
+        port=settings.web_port,
+        log_level="info",
+    )
+    return 0
+
+
+def _baseline(settings: Settings, args: argparse.Namespace) -> int:
+    """Run the checked intents against the live model and record the cost baseline."""
+    import asyncio
+
+    from scrum_agent.agent.baseline import run_baseline
+
+    try:
+        report = asyncio.run(run_baseline(settings, out_path=args.out))
+    except ValueError as error:
+        print(f"Configuration error - {error}", file=sys.stderr)
+        return 2
+    except JiraError as error:
+        print(f"Jira error: {error}", file=sys.stderr)
+        return 1
+    tasks = report["tasks"]
+    ok = sum(1 for task in tasks if task["answer_ok"])
+    print(f"Baseline: {ok}/{len(tasks)} intents answered correctly.")
+    print(f"Totals: {report['totals']}")
+    print(f"Artifact: {report['artifact_path']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     logging.basicConfig(
@@ -216,6 +276,10 @@ def main(argv: list[str] | None = None) -> int:
             return _sprints(settings, args)
         if args.command == "search":
             return _search(settings, args)
+        if args.command == "serve":
+            return _serve(settings)
+        if args.command == "baseline":
+            return _baseline(settings, args)
         return _probe(settings)
     except AmbiguousSprintError as error:
         print(f"Jira error: {error}", file=sys.stderr)

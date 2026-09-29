@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from scrum_agent.config import AuthMode, Settings
+from scrum_agent.config import AuthMode, Settings, require_model_settings
 from tests.conftest import make_settings
 
 _ENV_KEYS = (
@@ -28,6 +28,25 @@ def test_token_never_appears_in_repr() -> None:
     settings = make_settings()
     assert "tok-test-123" not in repr(settings)
     assert "tok-test-123" not in str(settings.model_dump())
+
+
+def test_model_secret_never_appears_in_repr_or_dump() -> None:
+    settings = make_settings(model_name="glm-test", model_api_key="model-test-secret")
+    assert "model-test-secret" not in repr(settings)
+    assert "model-test-secret" not in str(settings.model_dump())
+
+
+def test_model_settings_are_optional_until_chat_requires_them() -> None:
+    settings = make_settings()
+    assert settings.model_name is None
+    assert settings.model_api_key is None
+    with pytest.raises(ValueError, match="SCRUM_AGENT_MODEL_NAME"):
+        require_model_settings(settings)
+
+
+def test_model_settings_allow_chat_when_both_are_present() -> None:
+    settings = make_settings(model_name="glm-test", model_api_key="model-test-secret")
+    assert require_model_settings(settings) is None
 
 
 def test_basic_site_mode_uses_site_base_url() -> None:

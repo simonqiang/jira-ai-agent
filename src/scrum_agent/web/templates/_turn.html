@@ -1,0 +1,27 @@
+<article class="turn">
+  <p class="user"><span class="who">you</span> {{ turn.user_text }}</p>
+  <div class="answer"><span class="who">agent</span>
+    {{ turn.answer | linkify_issue_keys }}
+  </div>
+  {% if turn.sources %}
+  <details class="sources">
+    <summary>Sources (server-verified, fetched {{ turn.fetched_at | localtime }})</summary>
+    <ul>
+      {% for source in turn.sources %}
+      <li>
+        {% if source.issue_key %}
+          <a href="https://{{ jira_site }}/browse/{{ source.issue_key }}"
+             target="_blank" rel="noopener">{{ source.issue_key }}</a>
+        {% elif source.sprint_id %}
+          sprint {{ source.sprint_id }}
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+  <p class="turn-usage">{{ turn.usage_text }}</p>
+</article>
+{% if oob_usage %}
+<p id="usage" class="usage" hx-swap-oob="true">Session usage: {{ cumulative_usage }}</p>
+{% endif %}
