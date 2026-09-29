@@ -24,6 +24,7 @@ from tests.checked_queries import (
     _with_foreign_issue,
     _with_foreign_sprint,
 )
+from tests.conftest import make_settings
 
 SESSION = "test-session"
 
@@ -417,3 +418,40 @@ def test_fake_llm_is_strict_on_extra_model_calls() -> None:
 
     with pytest.raises(AssertionError, match="exhausted"):
         asyncio.run(exhaust())
+
+
+def test_sessions_stay_in_memory_without_database() -> None:
+    from google.adk.sessions import InMemorySessionService
+
+    chat, _, _ = make_chat()
+    assert isinstance(chat._sessions, InMemorySessionService)
+    asyncio.run(chat.aclose())
+
+
+def test_sessions_persist_when_database_configured() -> None:
+    from google.adk.sessions import DatabaseSessionService
+
+    from scrum_agent.agent.chat import asyncpg_url
+
+    settings = make_settings(database_url=" postgres://scrum_agent:pw@127.0.0.1:5432/db ")
+    chat, _, _ = make_chat(settings=settings)
+    assert isinstance(chat._sessions, DatabaseSessionService)
+    assert asyncpg_url(settings.database_url or "") == (
+        "postgresql+asyncpg://scrum_agent:pw@127.0.0.1:5432/db"
+    )
+    asyncio.run(chat.aclose())
+
+
+async def test_aclose_awaits_database_session_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    from google.adk.sessions import DatabaseSessionService
+
+    closed: list[bool] = []
+
+    async def fake_close(self: DatabaseSessionService) -> None:
+        closed.append(True)
+
+    monkeypatch.setattr(DatabaseSessionService, "close", fake_close)
+    settings = make_settings(database_url="postgresql://scrum_agent:pw@127.0.0.1:5432/db")
+    chat, _, _ = make_chat(settings=settings)
+    await chat.aclose()
+    assert closed == [True]
