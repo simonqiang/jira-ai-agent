@@ -24,11 +24,19 @@ CREATE TABLE IF NOT EXISTS public.schema_migrations (
 
 
 def connect(settings: Settings) -> psycopg.Connection:
-    """Open a sync connection pinned to UTC (all timestamps are UTC)."""
+    """Open a sync connection pinned to UTC (all timestamps are UTC).
+
+    Autocommit: every snapshot/event/checkpoint write is durable the moment it
+    executes, so an interrupted run leaves resumable partial state and only the
+    checkpoint marks success. run_migrations() still wraps each file in an
+    explicit transaction (a real one, now that implicit transactions cannot
+    silently swallow it).
+    """
     return psycopg.connect(
         settings.database_url or "",
         row_factory=dict_row,
         options="-c timezone=UTC",
+        autocommit=True,
     )
 
 

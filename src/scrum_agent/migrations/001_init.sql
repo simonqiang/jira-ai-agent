@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS scrum_agent.collection_runs (
     id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     started_at    timestamptz NOT NULL DEFAULT now(),
     finished_at   timestamptz,
-    status        text NOT NULL
+    status        text NOT NULL DEFAULT 'running'
                   CHECK (status IN ('running', 'success', 'error', 'interrupted')),
     trigger       text NOT NULL DEFAULT 'manual'
                   CHECK (trigger IN ('manual', 'scheduled')),

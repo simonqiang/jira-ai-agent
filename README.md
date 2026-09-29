@@ -6,12 +6,13 @@ sprint reports and preparing clear Jira tickets. Design and weekly roadmap:
 - [Product requirements and architecture](docs/superpowers/specs/2026-09-27-scrum-master-agent-design.md)
 - [Weekly implementation roadmap](docs/superpowers/plans/2026-09-27-weekly-delivery-roadmap.md)
 
-Status: **Week 3 — local read-only conversational agent in implementation**. Week 1's
-live issue and board reads work for board 23031. Week 2 adds sprint selection, typed
-filters, centralized pilot-scope checks and a checked query set — verified against
-mocked Jira; see the
-[Week 2 note](docs/superpowers/notes/2026-09-27-week-2.md) and the
-[Week 1 note](docs/superpowers/notes/2026-09-27-week-1.md).
+Status: **Week 4 — continuous sprint-history collection in implementation**. Week 1's
+live issue and board reads work for board 23031; Week 2 adds sprint selection, typed
+filters, centralized pilot-scope checks and a checked query set; Week 3 ships the
+local read-only ADK chat. Week 4 stores issue snapshots, changelog events, board
+configuration versions and collection checkpoints in a local PostgreSQL database —
+see the [Week 3 note](docs/superpowers/notes/2026-09-29-week-3.md) and the
+[Week 2 note](docs/superpowers/notes/2026-09-27-week-2.md).
 
 The intended runtime is a **local PC application**. Google Cloud deployment, public
 webhooks and a hosted collector are not required. Google ADK may call a configured
@@ -156,6 +157,67 @@ are recorded when the provider returns usage metadata; provider cost stays
 explicitly unknown until pricing is configured, and the command never treats an
 unknown value as zero cost.
 
+### Local collection (Week 4)
+
+The collector polls the configured project scope, reconciles every hinted issue
+against an authoritative per-issue read plus its full changelog, and stores
+snapshots, dedup-keyed changelog events, board-configuration versions and
+collection checkpoints. Polling results are hints only; the overlap window and
+per-issue reconciliation absorb Jira indexing lag and clock skew.
+
+```bash
+docker compose up -d            # local PostgreSQL (loopback only; pgvector image)
+scrum-agent migrate             # apply pending SQL migrations (idempotent)
+scrum-agent collect             # one idempotent collection cycle + freshness report
+scrum-agent collect --full      # reconcile every issue in the project scope
+scrum-agent freshness           # freshness/credential alarms; exit 1 when unhealthy
+```
+
+Notes:
+
+- The **first full collection reads every issue in the project scope** (about
+  4 minutes for ~250 issues plus changelogs); later cycles fetch only what
+  changed since the last success minus a 1-hour overlap.
+- Events are deduped on (issue, changelog entry, item position), so replaying a
+  run never duplicates history. A crashed run stays visible as `interrupted`
+  and the next run resumes cleanly; only a successful run advances the
+  checkpoint.
+- An issue that 404s or becomes inaccessible is tombstoned (`deleted_at`), not
+  silently dropped — visible gaps, not silent ones.
+- `SCRUM_AGENT_TOKEN_EXPIRES_ON` (ISO date) drives the credential-freshness
+  alarm: Jira cannot report a token's expiry date, so it is configured instead.
+  An expired token raises an ALARM (`freshness` exits 1); expiry within 7 days
+  raises a WARNING.
+
+**Backups** use the PC's normal tooling plus these one-liners (dump after a
+successful collection for a consistent snapshot):
+
+```bash
+docker compose exec -T db pg_dump -U scrum_agent scrum_agent > backup.sql
+docker compose exec -T db psql -U scrum_agent -d scrum_agent < backup.sql
+```
+
+**Unattended polling while the PC is on** (optional): schedule `scrum-agent
+collect` — for example launchd on macOS:
+
+```bash
+# crontab -e : collect every 30 minutes while the Mac is on
+*/30 * * * * cd /path/to/this/worktree && .venv/bin/python -m scrum_agent collect >> /tmp/scrum_agent_collect.log 2>&1
+```
+
+**Integration tests against a real database** (optional; skipped by default):
+point `SCRUM_AGENT_TEST_DATABASE_URL` at a *disposable* database — the test
+resets its schema — for example the bundled second database:
+
+```bash
+docker compose exec db createdb -U scrum_agent scrum_agent_test   # once
+SCRUM_AGENT_TEST_DATABASE_URL=postgresql://scrum_agent:scrum_agent@127.0.0.1:5432/scrum_agent_test pytest tests/test_storage.py
+```
+
+With `SCRUM_AGENT_DATABASE_URL` set, ADK chat sessions persist in PostgreSQL
+(keyed by app/user/session — single pilot user) and survive an app restart; the
+rendered web transcript remains in-process.
+
 ## Layout
 
 ```
@@ -170,6 +232,9 @@ src/scrum_agent/         application package
   search/service.py      issue lookup, sprint selection and search results
   agent/                 narrow read-only ADK tools, chat runner and usage tracking (Week 3)
   web/                   loopback-only FastAPI/Jinja chat UI (Week 3)
+  storage/               Postgres connection, migration runner, PgStorage queries (Week 4)
+  migrations/            numbered SQL migrations (schema_migrations tracks applied)
+  sync/                  idempotent collector + freshness/credential alarms (Week 4)
   search/errors.py       ambiguity/not-found errors that prompt, not guess
 tests/                   unit tests against a mocked transport
 tests/checked_queries.py the Week 2 checked query set + fixture Jira server
