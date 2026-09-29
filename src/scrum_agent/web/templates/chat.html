@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="scope">
+  <h1>scrum-agent pilot</h1>
+  <p>Read-only assistant &middot; project {{ project_key }} &middot; board {{ board_id }}
+     &middot; times in {{ timezone }} &middot; <a href="/healthz">health</a></p>
+</header>
+
+<section id="log" class="log" aria-live="polite">
+  {% for turn in turns %}{% include "_turn.html" %}{% endfor %}
+</section>
+
+<div id="thinking" class="thinking" aria-hidden="true">
+  <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+  <span class="thinking-text">thinking&hellip;</span>
+</div>
+
+<footer class="composer">
+  <form hx-post="/chat" hx-target="#log" hx-swap="beforeend"
+        hx-indicator="#thinking" hx-disabled-elt="find button"
+        hx-on::after-swap="event.detail.target.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'start' })"
+        hx-on::after-request="if (event.detail.successful) { this.reset(); this.querySelector('input').focus(); }"
+        hx-on::response-error="const err = document.getElementById('error'); err.textContent = 'Request failed (HTTP ' + event.detail.xhr.status + '): ' + event.detail.xhr.statusText; err.hidden = false;"
+        class="chat-form">
+    <input type="text" name="message" maxlength="2000" autocomplete="off"
+           placeholder="Ask about {{ project_key }} issues or sprints&hellip;" required>
+    <button type="submit">Ask</button>
+  </form>
+  <p id="error" class="error" hidden></p>
+  <form action="/reset" method="post" class="reset-form">
+    <button type="submit" title="Clear this short-lived conversation">New conversation</button>
+  </form>
+  <p id="usage" class="usage">Session usage: {{ cumulative_usage }}</p>
+</footer>
+{% endblock %}
