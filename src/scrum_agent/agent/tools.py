@@ -27,9 +27,7 @@ from scrum_agent.search.service import SearchService
 def _clean(values: list[str] | None) -> tuple[str, ...]:
     if values is None:
         return ()
-    if not isinstance(values, (list, tuple)) or not all(
-        isinstance(value, str) for value in values
-    ):
+    if not isinstance(values, (list, tuple)) or not all(isinstance(value, str) for value in values):
         raise ValueError("filter values must be provided as a list of strings")
     return tuple(value.strip() for value in values if value.strip())
 
@@ -121,9 +119,7 @@ def make_tools(service: SearchService) -> list[FunctionTool]:
                 labels=_clean(labels),
                 unresolved_only=unresolved_only,
             )
-            return ok_search_payload(
-                "search_sprint", service.search_sprint(reference, filters)
-            )
+            return ok_search_payload("search_sprint", service.search_sprint(reference, filters))
         except Exception as exc:
             return error_payload("search_sprint", exc)
 

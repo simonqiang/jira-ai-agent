@@ -128,7 +128,5 @@ def normalize_states(states: list[str] | None) -> tuple[str, ...]:
     cleaned = tuple(state.strip() for state in states or () if state.strip())
     unknown = [state for state in cleaned if state not in _VALID_SPRINT_STATES]
     if unknown:
-        raise ValueError(
-            f"sprint states must be a subset of {_VALID_SPRINT_STATES}; got {unknown}"
-        )
+        raise ValueError(f"sprint states must be a subset of {_VALID_SPRINT_STATES}; got {unknown}")
     return cleaned

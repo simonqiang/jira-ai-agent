@@ -242,9 +242,7 @@ def test_search_sprint_resolves_exact_name_and_substring_and_id() -> None:
 
 def test_search_sprint_returns_unresolved_bugs_for_demo_query() -> None:
     with tools_over(FakeJira()) as tools:
-        payload = tools["search_sprint"](
-            "Payments R2", issue_types=["Bug"], unresolved_only=True
-        )
+        payload = tools["search_sprint"]("Payments R2", issue_types=["Bug"], unresolved_only=True)
     assert payload["ok"] is True
     assert [issue["key"] for issue in payload["issues"]] == ["PAY-1"]
     assert {"issue_key": "PAY-1"} in payload["sources"]
@@ -349,6 +347,4 @@ def test_unreachable_jira_is_an_upstream_error() -> None:
 def test_foreign_sprint_fixture_stays_on_foreign_board() -> None:
     # Guard the fixture this suite depends on: sprint 81 stays on board 99.
     jira = _with_foreign_sprint()
-    assert any(
-        sprint.origin_board_id == 99 and sprint.id == 81 for sprint in jira.sprints
-    )
+    assert any(sprint.origin_board_id == 99 and sprint.id == 81 for sprint in jira.sprints)
