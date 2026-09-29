@@ -43,6 +43,8 @@ class JiraClient:
     ):
         self._settings = settings
         self._scope = scope if scope is not None else PilotScope.from_settings(settings)
+        self._field_names: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+        self._assignable_names: tuple[str, ...] | None = None
         self._http = httpx.Client(
             base_url=settings.base_url(),
             headers=settings.auth_headers(),
@@ -73,7 +75,7 @@ class JiraClient:
         *,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | list[Any]:
         try:
             response = self._http.request(method, path, params=params, json=json)
         except httpx.RequestError:
@@ -116,7 +118,7 @@ class JiraClient:
             payload = response.json()
         except ValueError:
             raise JiraApiError("Jira returned a non-JSON response") from None
-        if not isinstance(payload, dict):
+        if not isinstance(payload, (dict, list)):
             raise JiraApiError("Jira returned an unexpected response shape")
         return payload
 
@@ -291,3 +293,74 @@ class JiraClient:
         raise JiraApiError(
             f"JQL search exceeded {max_pages} pages; narrow the query or raise the limit"
         )
+
+    def project_field_names(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """The pilot project's (status names, issue type names), cached per client.
+
+        Feeds partial filter matching: JQL `~` only works on text fields, so
+        status/type filter values are resolved against these exact names before
+        the JQL compiles.
+        """
+        if self._field_names is None:
+            payload = self._request(
+                "GET", f"/rest/api/3/project/{self._settings.jira_project_key}/statuses"
+            )
+            if not isinstance(payload, list):
+                raise JiraApiError("Jira returned an unexpected response shape")
+            status_names: list[str] = []
+            type_names: list[str] = []
+            for group in payload:
+                if not isinstance(group, dict):
+                    raise JiraApiError("Jira returned an invalid project statuses page")
+                for status in group.get("statuses") or ():
+                    name = status.get("name") if isinstance(status, dict) else None
+                    if name:
+                        status_names.append(name)
+                issue_type = group.get("issueType")
+                if isinstance(issue_type, dict) and issue_type.get("name"):
+                    type_names.append(issue_type["name"])
+            self._field_names = (
+                tuple(dict.fromkeys(status_names)),
+                tuple(dict.fromkeys(type_names)),
+            )
+        return self._field_names
+
+    def assignable_user_names(
+        self, *, max_results_per_page: int = 50, max_pages: int = 20
+    ) -> tuple[str, ...]:
+        """Display names of users assignable to the pilot project, cached per client.
+
+        The endpoint returns bare arrays, so a short page marks the end
+        instead of an `isLast` flag.
+        """
+        if self._assignable_names is None:
+            names: list[str] = []
+            start_at = 0
+            for _ in range(max_pages):
+                payload = self._request(
+                    "GET",
+                    "/rest/api/3/user/assignable/search",
+                    params={
+                        "project": self._settings.jira_project_key,
+                        "startAt": start_at,
+                        "maxResults": max_results_per_page,
+                    },
+                )
+                if not isinstance(payload, list):
+                    raise JiraApiError("Jira returned an invalid assignable users page")
+                names.extend(
+                    display
+                    for user in payload
+                    if isinstance(user, dict)
+                    for display in (user.get("displayName"),)
+                    if display
+                )
+                if len(payload) < max_results_per_page:
+                    break
+                start_at += len(payload)
+            else:
+                raise JiraApiError(
+                    f"Assignable user listing exceeded {max_pages} pages; raise the limit"
+                )
+            self._assignable_names = tuple(dict.fromkeys(names))
+        return self._assignable_names

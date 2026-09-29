@@ -203,9 +203,47 @@ class FakeJira:
         match = re.fullmatch(r"/rest/api/3/issue/([A-Za-z0-9-]+)", path)
         if match:
             return self._issue_by_key(match.group(1))
+        if path == "/rest/api/3/project/PAY/statuses":
+            return self._project_statuses()
+        if path == "/rest/api/3/user/assignable/search":
+            return self._assignable_users(request)
         if path == "/rest/api/3/search/jql":
             return self._search(request)
         raise AssertionError(f"unexpected request {path}")
+
+    def _project_statuses(self) -> httpx.Response:
+        """Group the fixtures' statuses under their issue types (same v3 shape)."""
+        type_names = list(dict.fromkeys(issue.issue_type for issue in self.issues))
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "issueType": {"name": issue_type},
+                    "statuses": [
+                        {"name": status}
+                        for status in dict.fromkeys(
+                            issue.status for issue in self.issues if issue.issue_type == issue_type
+                        )
+                    ],
+                }
+                for issue_type in type_names
+            ],
+        )
+
+    def _assignable_users(self, request: httpx.Request) -> httpx.Response:
+        names = list(dict.fromkeys(issue.assignee for issue in self.issues if issue.assignee))
+        params = request.url.params
+        start_at = int(params.get("startAt", "0"))
+        max_results = int(params.get("maxResults", "50"))
+        return httpx.Response(
+            200,
+            json=[
+                {"accountId": f"acc-{position}", "displayName": name}
+                for position, name in enumerate(
+                    names[start_at : start_at + max_results], start=start_at
+                )
+            ],
+        )
 
     def _sprints_page(self, request: httpx.Request) -> httpx.Response:
         params = request.url.params
@@ -319,6 +357,16 @@ def _verify_multi_page_sprint_listing(service: SearchService, jira: FakeJira) ->
     assert [sprint.id for sprint in sprints] == [77, 78, 79]
 
 
+def _verify_partial_filter_names_expand(service: SearchService, jira: FakeJira) -> None:
+    result = service.search_issues(
+        IssueFilters(statuses=["progress"], issue_types=["bug"], assignees=["dev"])
+    )
+    _check_keys(result, ("PAY-1",))
+    assert '"In Progress"' in result.jql
+    assert '"Bug"' in result.jql
+    assert '"A. Developer"' in result.jql
+
+
 def _with_foreign_issue() -> FakeJira:
     return FakeJira(
         issues=DEFAULT_ISSUES
@@ -414,6 +462,12 @@ CHECKED_QUERIES: tuple[CheckedQuery, ...] = (
         intent="Sprint listings beyond one page are completely collected",
         make_jira=lambda: FakeJira(page_size=2),
         verify=_verify_multi_page_sprint_listing,
+    ),
+    CheckedQuery(
+        name="partial-filter-names-expand",
+        intent="Partial status/type/assignee names expand to the project's exact values",
+        make_jira=FakeJira,
+        verify=_verify_partial_filter_names_expand,
     ),
     CheckedQuery(
         name="board-spanning-project-scope-fails-closed",

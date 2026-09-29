@@ -172,6 +172,11 @@ def search_handler(
             )
         if path == "/rest/api/3/search/jql":
             return httpx.Response(200, json=search_page)
+        if path == "/rest/api/3/project/PAY/statuses":
+            return httpx.Response(
+                200,
+                json=[{"issueType": {"name": "Bug"}, "statuses": [{"name": "Done"}]}],
+            )
         assert path.endswith("/issue/PAY-1")
         return httpx.Response(200, json=ISSUE_PAYLOAD)
 
