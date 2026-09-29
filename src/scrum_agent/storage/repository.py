@@ -150,16 +150,16 @@ class PgStorage:
                 ),
             )
 
-    def tombstone_issue(self, issue_id: str) -> bool:
+    def tombstone_issue(self, issue_key: str) -> bool:
         """Mark an inaccessible issue deleted; False when nothing matched."""
         with self._conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE scrum_agent.issue_snapshots
                 SET deleted_at = now()
-                WHERE issue_id = %s AND deleted_at IS NULL
+                WHERE issue_key = %s AND deleted_at IS NULL
                 """,
-                (issue_id,),
+                (issue_key,),
             )
             return cur.rowcount > 0
 

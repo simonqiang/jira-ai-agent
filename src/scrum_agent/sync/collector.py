@@ -49,13 +49,16 @@ class CollectorService:
         self._now = now if now is not None else (lambda: datetime.now(UTC))
         self._sleep = sleep
 
-    def run(self, *, trigger: str = "manual") -> dict:
-        """Collect one cycle; returns a summary of what was stored."""
+    def run(self, *, trigger: str = "manual", full: bool = False) -> dict:
+        """Collect one cycle; ``full`` reconciles every issue in project scope.
+
+        Returns a summary of what was stored.
+        """
         run_id = self._storage.start_run(trigger)
         issues_seen = 0
         events_seen = 0
         try:
-            issues_seen, events_seen = self._collect(run_id)
+            issues_seen, events_seen = self._collect(run_id, full=full)
             self._storage.set_checkpoint("issues", self._now(), run_id)
         except Exception as error:
             self._storage.finish_run(run_id, status="error", error=str(error))
@@ -72,7 +75,7 @@ class CollectorService:
 
     # -- internals -----------------------------------------------------------
 
-    def _collect(self, run_id: int) -> tuple[int, int]:
+    def _collect(self, run_id: int, *, full: bool = False) -> tuple[int, int]:
         board_id = self._client.scope.board_id
         config = self._with_retry(lambda: self._client.get_board_configuration(board_id))
         self._record_board_config(run_id, config)
@@ -80,7 +83,7 @@ class CollectorService:
 
         issues_seen = 0
         events_seen = 0
-        for key in self._hinted_issue_keys():
+        for key in self._hinted_issue_keys(full=full):
             try:
                 detail = self._with_retry(
                     lambda key=key: self._client.get_issue_detail(
@@ -122,9 +125,9 @@ class CollectorService:
             board_id=config.id, config_hash=config_hash, config=config_payload, run_id=run_id
         )
 
-    def _hinted_issue_keys(self) -> list[str]:
+    def _hinted_issue_keys(self, *, full: bool = False) -> list[str]:
         """Issue keys Jira reports as updated since the overlapped checkpoint."""
-        last_success = self._storage.last_success()
+        last_success = None if full else self._storage.last_success()
         if last_success is None:
             jql = _COLD_START_JQL
         else:
