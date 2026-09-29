@@ -38,6 +38,17 @@ def ok(payload: dict) -> httpx.Response:
     return httpx.Response(200, json=payload)
 
 
+STATUSES_PAYLOAD = [
+    {"issueType": {"name": "Bug"}, "statuses": [{"name": "To Do"}, {"name": "In Progress"}]},
+    {"issueType": {"name": "Story"}, "statuses": [{"name": "To Do"}, {"name": "Done"}]},
+]
+
+ASSIGNEES_PAYLOAD = [
+    {"accountId": "acc-1", "displayName": "A. Developer"},
+    {"accountId": "acc-2", "displayName": "S. Tester"},
+]
+
+
 def listing_handler(sprints: list[dict]):
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -65,6 +76,10 @@ def search_sprint_handler(calls: list[dict], *, search_payload: dict | None = No
             return ok({"isLast": True, "values": SPRINTS})
         if path.endswith("/sprint/78"):
             return ok(SPRINTS[1])
+        if path == "/rest/api/3/project/PAY/statuses":
+            return ok(STATUSES_PAYLOAD)
+        if path == "/rest/api/3/user/assignable/search":
+            return ok(ASSIGNEES_PAYLOAD)
         if path == "/rest/api/3/search/jql":
             calls.append(json.loads(request.content))
             return ok(search_payload or {"issues": [], "isLast": True})
@@ -174,6 +189,8 @@ def test_search_returns_complete_result_with_freshness_and_sprint() -> None:
             return ok(pages[len(calls) - 1])
         if request.url.path.endswith("/sprint/78"):
             return ok(SPRINTS[1])
+        if request.url.path == "/rest/api/3/project/PAY/statuses":
+            return ok(STATUSES_PAYLOAD)
         raise AssertionError(f"unexpected path {request.url.path}")
 
     service, _ = make_service(handler)
@@ -189,18 +206,19 @@ def test_search_returns_complete_result_with_freshness_and_sprint() -> None:
 
 
 def test_search_reports_empty_results_accurately() -> None:
-    service, requests = make_service(
-        lambda request: (
-            ok({"issues": [], "isLast": True})
-            if request.url.path == "/rest/api/3/search/jql"
-            else AssertionError(f"unexpected {request.url.path}")
-        )
-    )
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/rest/api/3/search/jql":
+            return ok({"issues": [], "isLast": True})
+        if request.url.path == "/rest/api/3/project/PAY/statuses":
+            return ok(STATUSES_PAYLOAD)
+        raise AssertionError(f"unexpected {request.url.path}")
+
+    service, requests = make_service(handler)
     result = service.search_issues(IssueFilters(issue_types=["Epic"]))
     assert result.issues == ()
     assert result.result_count == 0
     assert result.is_empty
-    assert len(requests) == 1  # no sprint lookup unless a sprint filter is set
+    assert len(requests) == 2  # field names for partial matching + the search itself
 
 
 def test_search_fails_closed_on_out_of_scope_results() -> None:
@@ -239,6 +257,102 @@ def test_search_sprint_rejects_conflicting_sprint_filter() -> None:
     service, _ = make_service(listing_handler(SPRINTS))
     with pytest.raises(ValueError, match="only once"):
         service.search_sprint("Payments R2", IssueFilters(sprint_id=77))
+
+
+# -- partial filter matching -----------------------------------------------------
+
+
+def partial_handler(calls: list[dict], *, statuses: httpx.Response | None = None):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/rest/api/3/search/jql":
+            calls.append(json.loads(request.content))
+            return ok({"issues": [], "isLast": True})
+        if path == "/rest/api/3/project/PAY/statuses":
+            return statuses if statuses is not None else ok(STATUSES_PAYLOAD)
+        if path == "/rest/api/3/user/assignable/search":
+            return ok(ASSIGNEES_PAYLOAD)
+        raise AssertionError(f"unexpected path {path}")
+
+    return handler
+
+
+def test_partial_status_and_type_expand_to_exact_names() -> None:
+    calls: list[dict] = []
+    service, _ = make_service(partial_handler(calls))
+    service.search_issues(IssueFilters(statuses=["progress"], issue_types=["bug"]))
+    assert calls[0]["jql"] == 'project = PAY AND (status = "In Progress" AND issuetype = "Bug")'
+
+
+def test_partial_assignee_expands_but_unassigned_is_reserved() -> None:
+    calls: list[dict] = []
+    service, _ = make_service(partial_handler(calls))
+    service.search_issues(IssueFilters(assignees=["dev", "Unassigned"]))
+    assert calls[0]["jql"] == (
+        'project = PAY AND ((assignee = "A. Developer" OR assignee IS EMPTY))'
+    )
+
+
+def test_unmatched_filter_value_passes_through() -> None:
+    calls: list[dict] = []
+    service, _ = make_service(partial_handler(calls))
+    service.search_issues(IssueFilters(statuses=["Bogus"]))
+    assert calls[0]["jql"] == 'project = PAY AND (status = "Bogus")'
+
+
+def test_metadata_unavailable_falls_back_per_field_group() -> None:
+    """A 404 on one metadata endpoint degrades only its own field group."""
+    calls: list[dict] = []
+    service, _ = make_service(
+        partial_handler(calls, statuses=httpx.Response(404, json={"errorMessages": ["gone"]}))
+    )
+    service.search_issues(IssueFilters(statuses=["progress"], assignees=["dev"]))
+    assert (
+        calls[0]["jql"] == 'project = PAY AND (status = "progress" AND assignee = "A. Developer")'
+    )
+
+
+def test_metadata_failure_degrades_to_exact_search_not_an_error() -> None:
+    """Best-effort lookup: any metadata failure keeps Week 2 exact behaviour.
+
+    Scoped tokens legitimately lack the user scope `user/assignable/search`
+    needs; an optional enhancement must not break the search itself.
+    """
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/rest/api/3/project/PAY/statuses":
+            return httpx.Response(429, json={}, headers={"Retry-After": "7"})
+        if path == "/rest/api/3/search/jql":
+            calls.append(json.loads(request.content))
+            return ok({"issues": [], "isLast": True})
+        raise AssertionError(f"unexpected path {path}")
+
+    service, _ = make_service(handler)
+    result = service.search_issues(IssueFilters(statuses=["progress"]))
+    assert result.jql == 'status = "progress"'
+    assert len(calls) == 1, "the search itself still runs with exact values"
+
+
+def test_assignee_lookup_denied_keeps_exact_names_and_status_expansion() -> None:
+    """The live scoped-token failure: users endpoint 401, statuses endpoint fine."""
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/rest/api/3/project/PAY/statuses":
+            return ok(STATUSES_PAYLOAD)
+        if path == "/rest/api/3/user/assignable/search":
+            return httpx.Response(401, json={"errorMessages": ["Unauthorized"]})
+        if path == "/rest/api/3/search/jql":
+            calls.append(json.loads(request.content))
+            return ok({"issues": [], "isLast": True})
+        raise AssertionError(f"unexpected path {path}")
+
+    service, _ = make_service(handler)
+    service.search_issues(IssueFilters(statuses=["progress"], assignees=["Bao"]))
+    assert calls[0]["jql"] == 'project = PAY AND (status = "In Progress" AND assignee = "Bao")'
 
 
 def test_get_issue_delegates_to_client_scope_checks() -> None:

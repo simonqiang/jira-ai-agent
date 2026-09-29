@@ -11,9 +11,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from scrum_agent.jira.client import JiraClient
+from scrum_agent.jira.errors import JiraError
 from scrum_agent.jira.models import Issue, Sprint
 from scrum_agent.search.errors import AmbiguousSprintError, SprintNotFoundError
-from scrum_agent.search.filters import IssueFilters
+from scrum_agent.search.filters import UNASSIGNED, IssueFilters
 from scrum_agent.search.models import SearchResult
 
 
@@ -99,6 +100,54 @@ class SearchService:
 
     # -- search -------------------------------------------------------------
 
+    @staticmethod
+    def _expand(values: tuple[str, ...], universe: tuple[str, ...]) -> tuple[str, ...]:
+        """Replace each filter value with exact field names matching it partially.
+
+        An exact (case-insensitive) match wins; otherwise every name containing
+        the value matches; otherwise the value passes through unchanged, so an
+        unknown value still yields an accurate zero instead of an error.
+        """
+        names = [(name, name.casefold()) for name in universe]
+        expanded: list[str] = []
+        for value in values:
+            key = value.casefold()
+            matches = [name for name, lowered in names if lowered == key]
+            if not matches:
+                matches = [name for name, lowered in names if key in lowered]
+            expanded.extend(matches or [value])
+        return tuple(dict.fromkeys(expanded))
+
+    def _resolve_filters(self, filters: IssueFilters) -> IssueFilters:
+        """Expand partial status/type/assignee values to the project's exact names.
+
+        JQL `~` only works on text fields, so partial matching for these pickers
+        goes through the client's metadata endpoints instead. Each lookup is
+        best-effort: on any failure that field group keeps its original exact
+        values, matching Week 2 behaviour — an optional enhancement must never
+        break the search itself (scoped tokens, for example, commonly lack the
+        user scope `user/assignable/search` needs). Labels always stay exact
+        (Jira has no label enumeration).
+        """
+        update: dict[str, tuple[str, ...]] = {}
+        if filters.statuses or filters.issue_types:
+            try:
+                status_names, type_names = self._client.project_field_names()
+                update["statuses"] = self._expand(filters.statuses, status_names)
+                update["issue_types"] = self._expand(filters.issue_types, type_names)
+            except JiraError:
+                pass
+        named = tuple(a for a in filters.assignees if a != UNASSIGNED)
+        if named:
+            try:
+                # ponytail: match by display name; duplicate display names would over-select
+                update["assignees"] = self._expand(named, self._client.assignable_user_names()) + (
+                    (UNASSIGNED,) if UNASSIGNED in filters.assignees else ()
+                )
+            except JiraError:
+                pass
+        return filters.model_copy(update=update)
+
     def search_issues(
         self,
         filters: IssueFilters,
@@ -106,8 +155,13 @@ class SearchService:
         max_results_per_page: int = 50,
         max_pages: int = 20,
     ) -> SearchResult:
-        """Search issues with typed filters; return the complete, fresh result."""
-        jql = filters.to_jql()
+        """Search issues with typed filters; return the complete, fresh result.
+
+        Status, issue type and assignee values may be partial names (for example
+        ``"progress"`` matches ``"In Progress"``); they are expanded to the
+        project's exact values before the JQL compiles.
+        """
+        jql = self._resolve_filters(filters).to_jql()
         issues = tuple(
             self._client.iter_search_jql(
                 jql,

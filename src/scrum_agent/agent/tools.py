@@ -77,10 +77,13 @@ def make_tools(service: SearchService) -> list[FunctionTool]:
     ) -> dict:
         """Search the pilot project's issues with typed filters.
 
-        At least one filter must be given. 'Unassigned' in assignees matches
-        unassigned issues. sprint_id must come from list_sprints or a previous
-        result. Returns matching issues with sources, the compiled JQL and
-        fetched_at, or an error payload (invalid_input if no filter is set).
+        At least one filter must be given. statuses and issue_types may be
+        partial or lowercase names (for example "progress" matches "In
+        Progress"). assignees work best as exact full names ("Bao Ren"), and
+        labels must be exact. 'Unassigned' in assignees matches unassigned
+        issues. sprint_id must come from list_sprints or a previous result.
+        Returns matching issues with sources, the compiled JQL and fetched_at,
+        or an error payload (invalid_input if no filter is set).
         """
         try:
             filters = IssueFilters(
@@ -108,7 +111,8 @@ def make_tools(service: SearchService) -> list[FunctionTool]:
         sprint_reference is a sprint name, unique name substring or numeric ID
         (for example "Payments R2", "R3" or 78). Ambiguous references return
         error kind ambiguous_sprint with candidates: ask the user to choose,
-        never pick one yourself. Other filters narrow the issues in that sprint.
+        never pick one yourself. Other filters narrow the issues in that sprint;
+        statuses and issue_types may be partial names; assignees and labels exact.
         """
         try:
             reference = _text(sprint_reference, "sprint_reference")
