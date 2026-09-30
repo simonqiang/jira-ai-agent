@@ -420,8 +420,21 @@ def sprint_page(values: list[dict], *, is_last: bool, start_at: int = 0) -> dict
     }
 
 
+def board_then_sprint_handler(sprint_payload: dict, listed_ids: list[int]):
+    """Serve the board listing (scope authority) then the sprint detail."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/board/42/sprint"):
+            values = [{**SPRINT_PAYLOAD, "id": sprint_id} for sprint_id in listed_ids]
+            return ok(sprint_page(values, is_last=True))
+        assert request.url.path.endswith("/sprint/77")
+        return ok(sprint_payload)
+
+    return handler
+
+
 def test_get_sprint_parses_fields() -> None:
-    client, _ = make_client(lambda request: ok(SPRINT_PAYLOAD))
+    client, _ = make_client(board_then_sprint_handler(SPRINT_PAYLOAD, [77]))
     sprint = client.get_sprint(77)
     assert (sprint.id, sprint.name, sprint.state, sprint.origin_board_id) == (
         77,
@@ -434,10 +447,21 @@ def test_get_sprint_parses_fields() -> None:
     assert sprint.complete_date is not None
 
 
-def test_get_sprint_from_foreign_board_fails_closed() -> None:
-    client, _ = make_client(lambda request: ok({**SPRINT_PAYLOAD, "originBoardId": 99}))
+def test_get_sprint_accepts_foreign_origin_listed_by_the_board() -> None:
+    # Real boards list sprints originating on another board; the listing is
+    # the scope authority, not originBoardId.
+    client, requests = make_client(
+        board_then_sprint_handler({**SPRINT_PAYLOAD, "originBoardId": 99}, [77])
+    )
+    assert client.get_sprint(77).id == 77
+    assert [request.url.path for request in requests].count("/rest/agile/1.0/sprint/77") == 1
+
+
+def test_get_sprint_not_listed_by_the_board_fails_closed() -> None:
+    client, requests = make_client(board_then_sprint_handler(SPRINT_PAYLOAD, [78]))
     with pytest.raises(JiraPermissionError):
         client.get_sprint(77)
+    assert all("/sprint/77" not in request.url.path for request in requests)
 
 
 @pytest.mark.parametrize("sprint_id", [0, -1])
@@ -523,13 +547,14 @@ def test_iter_board_sprints_empty_page_with_is_last_true_completes() -> None:
     assert list(client.iter_board_sprints(42)) == []
 
 
-def test_iter_board_sprints_denies_foreign_board_sprint_in_listing() -> None:
+def test_iter_board_sprints_accepts_foreign_origin_sprints() -> None:
+    # The pilot's real board lists sprints originating on another board; the
+    # configured board's own endpoint is the scope authority for sprints.
     def handler(request: httpx.Request) -> httpx.Response:
         return ok(sprint_page([{**SPRINT_PAYLOAD, "originBoardId": 99}], is_last=True))
 
     client, _ = make_client(handler)
-    with pytest.raises(JiraPermissionError):
-        list(client.iter_board_sprints(42))
+    assert [sprint.id for sprint in client.iter_board_sprints(42)] == [77]
 
 
 def test_iter_board_sprints_blocks_other_board_before_http() -> None:

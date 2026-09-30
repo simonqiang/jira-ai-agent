@@ -21,6 +21,7 @@ class InMemoryStorage:
         self.events: dict[tuple[str, str, int], dict] = {}
         self.board_configs: list[dict] = []
         self.checkpoints: dict[str, dict] = {}
+        self.report_jobs: dict[int, dict] = {}
 
     # -- collection runs ---------------------------------------------------
 
@@ -178,3 +179,77 @@ class InMemoryStorage:
             ),
             "events_total": len(self.events),
         }
+
+    # -- report inputs (Week 5) ----------------------------------------------
+
+    def live_snapshots(self) -> list[dict]:
+        return [
+            {
+                key: s[key]
+                for key in (
+                    "issue_id",
+                    "issue_key",
+                    "summary",
+                    "status",
+                    "issue_type",
+                    "assignee",
+                    "updated",
+                    "fields",
+                )
+            }
+            for s in self.snapshots.values()
+            if s["deleted_at"] is None
+        ]
+
+    # -- report jobs (Week 5) --------------------------------------------------
+
+    def submit_report_job(
+        self, *, request_key: str, board_id: int, sprint_id: int, estimate_seconds: int
+    ) -> tuple[int, bool]:
+        for job in self.report_jobs.values():
+            if job["request_key"] == request_key:
+                return job["id"], False
+        job_id = max(self.report_jobs, default=0) + 1
+        self.report_jobs[job_id] = {
+            "id": job_id,
+            "request_key": request_key,
+            "kind": "sprint_report",
+            "board_id": board_id,
+            "sprint_id": sprint_id,
+            "status": "queued",
+            "attempts": 0,
+            "estimate_seconds": estimate_seconds,
+            "requested_at": self._now(),
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+            "report": None,
+        }
+        return job_id, True
+
+    def claim_next_report_job(self) -> dict | None:
+        for job in self.report_jobs.values():  # restart recovery, like the SQL
+            if job["status"] == "running":
+                job["status"] = "queued"
+                job["error"] = "requeued after restart"
+        for job in sorted(self.report_jobs.values(), key=lambda j: j["requested_at"]):
+            if job["status"] == "queued":
+                job["status"] = "running"
+                job["started_at"] = self._now()
+                job["attempts"] += 1
+                return {
+                    "id": job["id"],
+                    "board_id": job["board_id"],
+                    "sprint_id": job["sprint_id"],
+                    "attempts": job["attempts"],
+                }
+        return None
+
+    def finish_report_job(
+        self, job_id: int, *, status: str, error: str | None = None, report: dict | None = None
+    ) -> None:
+        job = self.report_jobs[job_id]
+        job.update(status=status, finished_at=self._now(), error=error, report=report)
+
+    def get_report_job(self, job_id: int) -> dict | None:
+        return self.report_jobs.get(job_id)

@@ -226,6 +226,35 @@ With `SCRUM_AGENT_DATABASE_URL` set, ADK chat sessions persist in PostgreSQL
 (keyed by app/user/session — single pilot user) and survive an app restart; the
 rendered web transcript remains in-process.
 
+### Sprint reports (Week 5)
+
+Reports are computed in Python from the **persisted collection inputs** (Week 4
+snapshots plus the versioned board configuration), never from search samples or
+model output: current scope, status counts against the board's done columns,
+configured estimates (missing stays unknown, never zero) and explicit blockers
+only — a `blocked` label or a blocks-issue link. Sprint-goal achievement stays
+human-confirmed or unknown; commitment/scope-change history needs changelog
+analysis and is reported as unavailable until Week 6.
+
+Generation is asynchronous and durable: submitting persists a job row keyed by
+board/sprint/cutoff-hour, so duplicate delivery returns the existing job, and a
+restarted worker requeues a job orphaned mid-run instead of losing it. Before
+any number is stored, every contributing issue is revalidated with one scoped
+live search — stored issues that are no longer visible are excluded from
+details **and** totals and the report is labeled partial.
+
+```bash
+scrum-agent report --sprint "Payments R2"              # submit + run worker inline, print Markdown
+scrum-agent report --sprint 78 --format csv --out r.csv  # CSV export to a file
+```
+
+The web UI adds `/reports`: pick a sprint, watch the job, view the report
+(HTML-escaped) and download the same authorized result as Markdown or CSV. In
+chat, `build_sprint_report` returns a job handle (never blocks) and
+`get_report` polls it. Exports sanitize CSV cells beginning with `=`, `+`, `-`
+or `@` against spreadsheet formula injection and escape pipes and markup in
+rendered views.
+
 ## Layout
 
 ```

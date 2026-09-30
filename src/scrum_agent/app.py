@@ -11,6 +11,7 @@ import argparse
 import logging
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
@@ -91,6 +92,25 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     subparsers.add_parser(
         "freshness",
         help="show collection freshness and credential-expiry alarms (Week 4)",
+    )
+
+    report_parser = subparsers.add_parser(
+        "report",
+        help="generate a current-sprint report through the durable job engine (Week 5)",
+    )
+    report_parser.add_argument("--sprint", required=True, help="sprint name or numeric ID")
+    report_parser.add_argument(
+        "--format",
+        choices=("md", "csv"),
+        default="md",
+        help="output format (default: md)",
+    )
+    report_parser.add_argument("--out", help="write the export to this path instead of stdout")
+    report_parser.add_argument(
+        "--wait",
+        type=float,
+        default=60.0,
+        help="seconds to wait for the worker to finish the job (default: 60)",
     )
 
     args = parser.parse_args(argv)
@@ -253,14 +273,23 @@ def _search(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def _serve(settings: Settings) -> int:
-    """Run the Week 3 chat UI; loopback-only by validated settings."""
+    """Run the Week 3 chat UI plus the Week 5 reports; loopback-only."""
     import uvicorn
 
     from scrum_agent.agent.chat import ChatService
     from scrum_agent.web import create_app
 
+    jobs = None
+    if settings.database_url is not None:
+        from scrum_agent.reports.jobs import ReportJobs
+
+        try:
+            jobs = ReportJobs(settings)
+        except ValueError as error:
+            print(f"Configuration error - {error}", file=sys.stderr)
+            return 2
     try:
-        chat = ChatService(settings)
+        chat = ChatService(settings, jobs=jobs)
     except ValueError as error:
         print(f"Configuration error - {error}", file=sys.stderr)
         return 2
@@ -269,7 +298,7 @@ def _serve(settings: Settings) -> int:
         "(loopback only; Ctrl-C to stop)"
     )
     uvicorn.run(
-        create_app(settings, chat),
+        create_app(settings, chat, jobs),
         host=settings.web_host,
         port=settings.web_port,
         log_level="info",
@@ -406,6 +435,46 @@ def _collect(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _report(settings: Settings, args: argparse.Namespace) -> int:
+    """Submit a sprint-report job, run the local worker until it finishes."""
+    import time
+
+    from scrum_agent.reports.exports import to_csv, to_markdown
+    from scrum_agent.reports.jobs import ReportJobs, job_view
+
+    if not _require_database(settings):
+        return 2
+    jobs = ReportJobs(settings)
+    try:
+        handle = jobs.submit(args.sprint)
+        print(
+            f"Report job {handle['job_id']} for sprint {handle['sprint_name']} "
+            f"[{handle['status']}, estimate ~{handle['estimate_seconds']}s]"
+            + (" (reusing the existing job for this cutoff hour)" if handle["reused"] else "")
+        )
+        deadline = time.monotonic() + args.wait
+        while handle["status"] in ("queued", "running") and time.monotonic() < deadline:
+            jobs.run_once()
+            row = jobs.storage().get_report_job(handle["job_id"])
+            handle = job_view(row)
+        if handle["status"] == "error":
+            print(f"Report job failed: {handle['error']}", file=sys.stderr)
+            return 1
+        if handle["status"] != "done":
+            print("Report job did not finish in time; poll it later.", file=sys.stderr)
+            return 1
+        report = handle["report"]
+        content = to_markdown(report) if args.format == "md" else to_csv(report)
+        if args.out:
+            Path(args.out).write_text(content, encoding="utf-8")
+            print(f"Wrote {args.out}")
+        else:
+            print(content)
+        return 0
+    finally:
+        jobs.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     logging.basicConfig(
@@ -438,6 +507,8 @@ def main(argv: list[str] | None = None) -> int:
             return _collect(settings, args)
         if args.command == "freshness":
             return _freshness(settings)
+        if args.command == "report":
+            return _report(settings, args)
         return _probe(settings)
     except AmbiguousSprintError as error:
         print(f"Jira error: {error}", file=sys.stderr)

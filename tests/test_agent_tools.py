@@ -22,7 +22,14 @@ from tests.checked_queries import (
     _with_foreign_sprint,
 )
 
-READ_ONLY_TOOL_NAMES = {"get_issue", "list_sprints", "search_issues", "search_sprint"}
+READ_ONLY_TOOL_NAMES = {
+    "get_issue",
+    "list_sprints",
+    "search_issues",
+    "search_sprint",
+    "build_sprint_report",
+    "get_report",
+}
 
 
 # -- registry is narrow and read-only ---------------------------------------------
@@ -191,11 +198,12 @@ def test_list_sprints_rejects_unknown_state() -> None:
     assert payload["error"]["kind"] == "invalid_input"
 
 
-def test_list_sprints_fails_closed_on_foreign_board_sprint() -> None:
+def test_list_sprints_includes_foreign_origin_sprints() -> None:
+    # The board's own listing is the scope authority for sprints.
     with tools_over(_with_foreign_sprint()) as tools:
         payload = tools["list_sprints"]()
-    assert payload["ok"] is False
-    assert payload["error"]["kind"] == "permission_denied"
+    assert payload["ok"] is True
+    assert 81 in [sprint["id"] for sprint in payload["sprints"]]
 
 
 # -- search_issues ----------------------------------------------------------------
@@ -302,9 +310,9 @@ def test_search_sprint_unknown_name_is_reported_not_guessed() -> None:
     assert payload["error"]["kind"] == "sprint_not_found"
 
 
-def test_search_sprint_foreign_board_id_is_denied() -> None:
+def test_search_sprint_unlisted_sprint_id_is_denied() -> None:
     with tools_over(_with_foreign_sprint()) as tools:
-        payload = tools["search_sprint"]("81")
+        payload = tools["search_sprint"]("82")
     assert payload["ok"] is False
     assert payload["error"]["kind"] == "permission_denied"
 

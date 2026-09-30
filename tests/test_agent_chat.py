@@ -202,25 +202,25 @@ INTENTS: list[tuple] = [
         [],
     ),
     (
-        "foreign-board-sprint-in-listing-fails-closed",
+        "foreign-origin-sprint-listed-by-board-is-in-scope",
         _with_foreign_sprint,
         [
             ScriptedStep(tool_calls=(tool_call("list_sprints"),)),
             final(
-                "Listing sprints was denied: a sprint outside the pilot board "
-                "was present, so no sprint list can be shown."
+                "The board lists 4 sprints including Payments R1 (closed) and "
+                "Cross-board sprint (active), which originates on another board."
             ),
         ],
-        ["denied"],
         ["Payments R1", "Cross-board sprint"],
-        [],
+        ["denied"],
+        [{"sprint_id": 77}, {"sprint_id": 78}, {"sprint_id": 79}, {"sprint_id": 81}],
     ),
     (
-        "foreign-board-sprint-by-id-fails-closed",
+        "unlisted-sprint-by-id-fails-closed",
         _with_foreign_sprint,
         [
-            ScriptedStep(tool_calls=(tool_call("search_sprint", sprint_reference="81"),)),
-            final("Sprint 81 belongs to another board; access was denied."),
+            ScriptedStep(tool_calls=(tool_call("search_sprint", sprint_reference="82"),)),
+            final("Sprint 82 is not listed by the pilot board; access was denied."),
         ],
         ["denied"],
         ["Cross-board sprint"],

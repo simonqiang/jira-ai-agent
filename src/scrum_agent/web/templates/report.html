@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="scope">
+  <h1>Report job {{ job.job_id }}</h1>
+  <p><a href="/reports">new report</a> &middot; <a href="/">back to chat</a></p>
+</header>
+
+{% if job.status in ("queued", "running") %}
+<section class="report-pending" hx-get="/reports/{{ job.job_id }}" hx-trigger="load delay:1s" hx-swap="outerHTML">
+  <p>Job {{ job.job_id }} is {{ job.status }}&hellip; (attempt {{ job.attempts }}, estimate ~{{ job.estimate_seconds }}s)</p>
+</section>
+
+{% elif job.status == "error" %}
+<section class="report-error">
+  <p>Job {{ job.job_id }} failed: {{ job.error }}</p>
+  <p><a href="/reports">Try again</a></p>
+</section>
+
+{% else %}
+{% set sprint = report.sprint %}
+<section class="report-header">
+  <h2>Sprint report: {{ sprint.name }} (sprint {{ sprint.id }}, {{ sprint.state }})</h2>
+  <p>
+    Completeness: <strong>{{ report.completeness }}</strong>
+    &middot; cutoff {{ report.cutoff_at }} ({{ report.timezone }})
+    &middot; freshness: last collection {{ report.freshness.last_success_at or "never" }}
+    {% if report.freshness.success_age %}({{ report.freshness.success_age }} ago){% endif %}
+  </p>
+  {% for note in report.completeness_notes %}<p class="note">Note: {{ note }}</p>{% endfor %}
+  <p>
+    <a href="/reports/{{ job.job_id }}/report.md">Markdown export</a>
+    &middot; <a href="/reports/{{ job.job_id }}/report.csv">CSV export</a>
+  </p>
+</section>
+
+<section class="report-totals">
+  <h3>Totals</h3>
+  <table>
+    <tbody>
+      <tr><th>Current scope</th><td>{{ report.scope.total }} issue(s)</td></tr>
+      <tr><th>Done (in done column)</th><td>{{ report.done.count }}</td></tr>
+      <tr><th>Not done</th><td>{{ report.done.not_done_count }}</td></tr>
+      <tr><th>Estimates total</th><td>{{ report.estimates.total }}</td></tr>
+      <tr><th>Estimates done / not done</th><td>{{ report.estimates.done_total }} / {{ report.estimates.not_done_total }}</td></tr>
+      <tr><th>Missing estimate (unknown)</th><td>{{ report.estimates.missing_estimate }}</td></tr>
+      <tr><th>Explicit blockers</th><td>{{ report.blockers | length }}</td></tr>
+      {% if report.excluded.count %}
+      <tr><th>Excluded (unauthorized/invisible)</th><td>{{ report.excluded.count }}</td></tr>
+      {% endif %}
+      {% for status, count in report.status_counts.items() %}
+      <tr><th>Status: {{ status }}</th><td>{{ count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="report-issues">
+  <h3>Issues</h3>
+  <table>
+    <thead>
+      <tr><th>Key</th><th>Summary</th><th>Type</th><th>Status</th><th>Assignee</th><th>Estimate</th><th>Blocked</th></tr>
+    </thead>
+    <tbody>
+      {% for issue in report.issues %}
+      <tr>
+        <td><a href="https://{{ jira_site }}/browse/{{ issue.key }}">{{ issue.key }}</a></td>
+        <td>{{ issue.summary }}</td>
+        <td>{{ issue.issue_type }}</td>
+        <td>{{ issue.status }}</td>
+        <td>{{ issue.assignee or "Unassigned" }}</td>
+        <td>{{ issue.estimate if issue.estimate is not none else "?" }}</td>
+        <td>{{ issue.blocked_evidence or "" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="report-narrative">
+  <h3>Narrative</h3>
+  <p class="narrative">{{ report.narrative }}</p>
+</section>
+{% endif %}
+{% endblock %}

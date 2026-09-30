@@ -13,7 +13,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from scrum_agent.config import Settings
 from scrum_agent.jira.errors import JiraPermissionError
-from scrum_agent.jira.models import Sprint
 
 
 class PilotScope(BaseModel):
@@ -48,8 +47,7 @@ class PilotScope(BaseModel):
         if board_id != self.board_id:
             raise JiraPermissionError("Board is outside the configured pilot scope")
 
-    def assert_sprint(self, sprint: Sprint) -> None:
-        if sprint.origin_board_id != self.board_id:
-            raise JiraPermissionError(
-                "Sprint belongs to a board outside the configured pilot scope"
-            )
+    # Sprint scope is decided by the configured board's own sprint listing
+    # (client.get_sprint), not by origin_board_id: real boards list sprints
+    # that originate on another board, and issue data stays project-scoped
+    # separately on every search.

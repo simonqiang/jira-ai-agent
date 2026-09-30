@@ -46,14 +46,14 @@ class TurnResult:
     fetched_at: str = ""
 
 
-def build_agent(service: SearchService, llm: BaseLlm, usage: UsageRecorder) -> LlmAgent:
+def build_agent(service: SearchService, llm: BaseLlm, usage: UsageRecorder, jobs=None) -> LlmAgent:
     """Assemble the read-only pilot agent."""
     return LlmAgent(
         name="scrum_agent",
         model=llm,
         description="Read-only Scrum Master Jira assistant for the pilot board.",
         instruction=AGENT_INSTRUCTION,
-        tools=make_tools(service),
+        tools=make_tools(service, jobs),
         after_model_callback=usage.on_model_response,
     )
 
@@ -87,18 +87,25 @@ class ChatService:
         *,
         llm: BaseLlm | None = None,
         transport: BaseTransport | None = None,
+        jobs=None,
     ) -> None:
         if llm is None:
             llm = ZaiAnthropicLlm.from_settings(settings)
         self._client = JiraClient(settings, transport=transport)
         self._service = SearchService(self._client)
         self.usage = UsageRecorder()
-        self._agent = build_agent(self._service, llm, self.usage)
+        self._jobs = jobs
+        self._agent = build_agent(self._service, llm, self.usage, jobs)
         self._sessions = build_session_service(settings)
         self._runner = Runner(
             app_name=self.APP_NAME, agent=self._agent, session_service=self._sessions
         )
         self._turn_counts: dict[str, int] = {}
+
+    @property
+    def jobs(self):
+        """The report job engine (None until the caller provides one)."""
+        return self._jobs
 
     @property
     def service(self) -> SearchService:
@@ -164,8 +171,10 @@ class ChatService:
         self._turn_counts.pop(session_id, None)
 
     async def aclose(self) -> None:
-        """Release the Jira client and any database session engine."""
+        """Release the Jira client, report jobs and any session engine."""
         self._client.close()
+        if self._jobs is not None:
+            self._jobs.close()
         close = getattr(self._sessions, "close", None)
         if close is not None:
             await close()

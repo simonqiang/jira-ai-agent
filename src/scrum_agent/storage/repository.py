@@ -230,3 +230,97 @@ class PgStorage:
         with self._conn.cursor() as cur:
             cur.execute("SELECT * FROM scrum_agent.collection_freshness")
             return dict(cur.fetchone())
+
+    # -- report inputs (Week 5) ----------------------------------------------
+
+    def live_snapshots(self) -> list[dict]:
+        """Every non-tombstoned snapshot: the report's persisted input set."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT issue_id, issue_key, summary, status, issue_type, assignee,
+                       updated, fields
+                FROM scrum_agent.issue_snapshots
+                WHERE deleted_at IS NULL
+                """
+            )
+            return cur.fetchall()
+
+    # -- report jobs (Week 5) --------------------------------------------------
+
+    def submit_report_job(
+        self, *, request_key: str, board_id: int, sprint_id: int, estimate_seconds: int
+    ) -> tuple[int, bool]:
+        """Insert a job keyed by request identity; (id, created) with the
+        existing row's id when the same request is delivered twice."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO scrum_agent.report_jobs
+                    (request_key, board_id, sprint_id, estimate_seconds)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (request_key) DO NOTHING
+                RETURNING id
+                """,
+                (request_key, board_id, sprint_id, estimate_seconds),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                return int(row["id"]), True
+            cur.execute(
+                "SELECT id FROM scrum_agent.report_jobs WHERE request_key = %s",
+                (request_key,),
+            )
+            return int(cur.fetchone()["id"]), False
+
+    def claim_next_report_job(self) -> dict | None:
+        """Requeue jobs orphaned by a restart, then claim one queued job."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE scrum_agent.report_jobs
+                SET status = 'queued', error = 'requeued after restart'
+                WHERE status = 'running'
+                """
+            )
+            cur.execute(
+                """
+                UPDATE scrum_agent.report_jobs
+                SET status = 'running', started_at = now(), attempts = attempts + 1
+                WHERE id = (
+                    SELECT id FROM scrum_agent.report_jobs
+                    WHERE status = 'queued'
+                    ORDER BY requested_at
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                )
+                RETURNING id, board_id, sprint_id, attempts
+                """
+            )
+            row = cur.fetchone()
+            return dict(row) if row is not None else None
+
+    def finish_report_job(
+        self,
+        job_id: int,
+        *,
+        status: str,
+        error: str | None = None,
+        report: dict | None = None,
+    ) -> None:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE scrum_agent.report_jobs
+                SET status = %s, finished_at = now(), error = %s, report = %s
+                WHERE id = %s
+                """,
+                (status, error, json.dumps(report) if report is not None else None, job_id),
+            )
+
+    def get_report_job(self, job_id: int) -> dict | None:
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT * FROM scrum_agent.report_jobs WHERE id = %s", (job_id,))
+            row = cur.fetchone()
+            # psycopg decodes jsonb to dict; the fake stores one directly.
+            return row

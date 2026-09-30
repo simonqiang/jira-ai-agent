@@ -54,13 +54,17 @@ _ISSUE_FIELDS = [
 ]
 
 # Curated field list for the collector's authoritative per-issue read; the
-# board-specific estimate field is appended per run via extra_fields.
+# board-specific estimate field is appended per run via extra_fields. Sprint
+# membership lives in the greenhopper field: "sprint" (string array) where
+# served, customfield_10020 (object array with id/boardId/goal) on the pilot
+# site — record both, the report parser accepts either shape.
 _ISSUE_DETAIL_FIELDS = [
     *_ISSUE_FIELDS,
     "created",
     "resolution",
     "labels",
     "sprint",
+    "customfield_10020",  # Sprint (greenhopper) on the pilot site
 ]
 
 _SPRINT_STATES = ("future", "active", "closed")
@@ -254,14 +258,24 @@ class JiraClient:
         )
 
     def get_sprint(self, sprint_id: int) -> Sprint:
-        """Fetch one sprint; sprints from other boards fail closed."""
+        """Fetch one sprint; only sprints the configured board lists are in scope.
+
+        Real boards list sprints that originate on another board (the pilot
+        board does), so origin_board_id is not a scope signal: the board's own
+        sprint listing is. Issue data stays bounded by the project-scoped JQL
+        on every search regardless.
+        """
         if sprint_id <= 0:
             raise JiraApiError("sprint_id must be a positive integer")
-        sprint = self._parse_response(
+        listed_ids = {sprint.id for sprint in self.iter_board_sprints(self._scope.board_id)}
+        if sprint_id not in listed_ids:
+            raise JiraPermissionError(
+                "Sprint is not listed by the configured pilot board; "
+                "verify the sprint ID against `scrum-agent sprints`"
+            )
+        return self._parse_response(
             Sprint.from_api, self._request("GET", f"/rest/agile/1.0/sprint/{sprint_id}")
         )
-        self._scope.assert_sprint(sprint)
-        return sprint
 
     def iter_board_sprints(
         self,
@@ -271,10 +285,12 @@ class JiraClient:
         max_results_per_page: int = 50,
         max_pages: int = 20,
     ) -> Iterator[Sprint]:
-        """Iterate the board's sprints (agile API), following startAt pagination.
+        """Iterate the configured board's sprints (agile API), paginated.
 
-        Every returned sprint is verified to originate from the configured board,
-        so a board filter spanning other boards cannot leak sprints into results.
+        The board's own sprint endpoint is the scope authority for sprints: a
+        board whose filter spans projects legitimately lists sprints that
+        originate on another board. Issue-level scope is enforced separately —
+        every JQL search is hard-scoped to the pilot project.
         """
         self._check_board_scope(board_id)
         invalid_states = set(states) - set(_SPRINT_STATES)
@@ -299,9 +315,7 @@ class JiraClient:
             if not isinstance(values, list) or not isinstance(is_last, bool):
                 raise JiraApiError("Jira returned an invalid sprint page")
             for item in values:
-                sprint = self._parse_response(Sprint.from_api, item)
-                self._scope.assert_sprint(sprint)
-                yield sprint
+                yield self._parse_response(Sprint.from_api, item)
             if is_last:
                 return
             if not values:
