@@ -9,6 +9,7 @@ PAY-1 (In Progress, 3 points, blocked) / PAY-2 (Done, 2 points) / PAY-3
 from __future__ import annotations
 
 import csv
+from datetime import UTC, datetime
 
 import httpx
 
@@ -16,6 +17,7 @@ from scrum_agent.agent.chat import ChatService
 from scrum_agent.jira.client import JiraClient
 from scrum_agent.jira.models import BoardColumn, BoardConfiguration, Sprint
 from scrum_agent.reports.exports import sanitize_cell, to_csv, to_markdown
+from scrum_agent.reports.history import build_historical_metrics
 from scrum_agent.reports.jobs import ReportJobs
 from scrum_agent.reports.metrics import (
     build_narrative,
@@ -349,3 +351,179 @@ def test_membership_parses_both_jira_sprint_field_shapes() -> None:
     assert sprint_ids_in_fields(string_shape) == {78}
     assert sprint_ids_in_fields(object_shape) == {75203}
     assert sprint_ids_in_fields({"customfield_10020": None}) == set()
+
+
+# -- Week 6 historical metrics --------------------------------------------------
+
+
+def test_historical_metrics_follow_ordered_changelog_not_current_snapshot() -> None:
+    config = BoardConfiguration(
+        id=42,
+        name="Payments Scrum Board",
+        columns=(
+            BoardColumn(name="To Do", statuses=("1",)),
+            BoardColumn(name="Done", statuses=("5",)),
+        ),
+        estimation_type="field",
+        estimate_field_id="customfield_10002",
+        estimate_field_name="Story Points",
+    )
+    sprint = Sprint(
+        id=77,
+        name="Payments R1",
+        state="closed",
+        origin_board_id=42,
+        start_date="2026-09-01T09:00:00+08:00",
+        complete_date="2026-09-14T18:00:00+08:00",
+    )
+    snapshots = [
+        {
+            "issue_id": "1",
+            "issue_key": "PAY-1",
+            "fields": {},
+        },
+        {
+            "issue_id": "2",
+            "issue_key": "PAY-2",
+            "fields": {},
+        },
+        {
+            "issue_id": "3",
+            "issue_key": "PAY-3",
+            "fields": {},
+        },
+    ]
+
+    def event(
+        issue_id: str, event_id: str, at: str, field: str, before: str | None, after: str | None
+    ) -> dict:
+        return {
+            "issue_id": issue_id,
+            "changelog_id": event_id,
+            "item_index": 0,
+            "field": field,
+            "field_id": "customfield_10002" if field == "Story Points" else None,
+            "from_id": before,
+            "from_value": None,
+            "to_id": after,
+            "to_value": None,
+            "occurred_at": datetime.fromisoformat(at),
+        }
+
+    metrics = build_historical_metrics(
+        snapshot_rows=snapshots,
+        event_rows=[
+            event("1", "1", "2026-08-30T00:00:00+00:00", "Sprint", "", "id=77"),
+            event("1", "2", "2026-08-30T00:01:00+00:00", "status", "", "1"),
+            event("1", "3", "2026-08-30T00:02:00+00:00", "Story Points", "", "3"),
+            event("1", "4", "2026-09-02T00:00:00+00:00", "status", "1", "5"),
+            event("1", "5", "2026-09-05T00:00:00+00:00", "status", "5", "1"),
+            event("1", "6", "2026-09-16T00:00:00+00:00", "Sprint", "id=77", "id=78"),
+            event("2", "7", "2026-08-30T00:00:00+00:00", "Sprint", "", "id=77"),
+            event("2", "8", "2026-08-30T00:01:00+00:00", "status", "", "1"),
+            event("2", "9", "2026-09-03T00:00:00+00:00", "Story Points", "", "2"),
+            event("3", "10", "2026-09-04T00:00:00+00:00", "Sprint", "", "id=77"),
+        ],
+        config=config,
+        sprint=sprint,
+        cutoff_at=datetime(2026, 9, 20, tzinfo=UTC),
+    )
+
+    assert metrics["status"] == "final"  # PAY-2 estimate is unknown, not zero
+    assert metrics["committed"]["count"] == 2
+    assert metrics["completion"]["completed_during_sprint"] == 0
+    assert metrics["completion"]["reopened"] == ["PAY-1"]
+    assert metrics["completion"]["rollover"] == ["PAY-1"]
+    assert metrics["committed"]["issues"][0]["start_estimate"] == 3
+    assert metrics["committed"]["issues"][1]["start_estimate"] is None
+    assert metrics["scope_changes"]["added"] == ["PAY-3"]
+    assert metrics["completion"]["point_commitment_ratio"] is None
+    assert metrics["completion"]["point_ratio_reason"] == "unknown start-time estimate"
+
+
+def test_historical_metrics_refuse_missing_boundaries_and_subtask_double_counting() -> None:
+    config = BoardConfiguration(id=42, name="Board", columns=())
+    no_dates = Sprint(id=77, name="R1", state="closed", origin_board_id=42)
+    unavailable = build_historical_metrics(
+        snapshot_rows=[],
+        event_rows=[],
+        config=config,
+        sprint=no_dates,
+        cutoff_at=datetime.now(UTC),
+    )
+    assert unavailable["status"] == "unavailable"
+
+    sprint = Sprint(
+        id=77,
+        name="R1",
+        state="closed",
+        origin_board_id=42,
+        start_date="2026-09-01T00:00:00+00:00",
+        complete_date="2026-09-02T00:00:00+00:00",
+    )
+    metrics = build_historical_metrics(
+        snapshot_rows=[{"issue_id": "1", "issue_key": "PAY-1", "fields": {"parent": {"id": "9"}}}],
+        event_rows=[],
+        config=config,
+        sprint=sprint,
+        cutoff_at=datetime.now(UTC),
+    )
+    assert metrics["committed"]["count"] == 0
+    assert metrics["excluded_subtasks"] == ["PAY-1"]
+
+
+def test_single_edit_touching_multiple_fields_is_not_ambiguous() -> None:
+    config = BoardConfiguration(
+        id=42,
+        name="Board",
+        columns=(
+            BoardColumn(name="To Do", statuses=("1",)),
+            BoardColumn(name="Done", statuses=("5",)),
+        ),
+        estimation_type="field",
+        estimate_field_id="customfield_10002",
+        estimate_field_name="Story Points",
+    )
+    sprint = Sprint(
+        id=77,
+        name="R1",
+        state="closed",
+        origin_board_id=42,
+        start_date="2026-09-01T00:00:00+00:00",
+        complete_date="2026-09-14T00:00:00+00:00",
+    )
+
+    def event(cid: str, index: int, at: str, field: str, to: str) -> dict:
+        return {
+            "issue_id": "1",
+            "changelog_id": cid,
+            "item_index": index,
+            "field": field,
+            "field_id": "customfield_10002" if field == "Story Points" else None,
+            "from_id": None,
+            "from_value": None,
+            "to_id": to,
+            "to_value": None,
+            "occurred_at": datetime.fromisoformat(at),
+        }
+
+    metrics = build_historical_metrics(
+        snapshot_rows=[{"issue_id": "1", "issue_key": "PAY-1", "fields": {}}],
+        event_rows=[
+            event("1", 0, "2026-08-30T00:00:00+00:00", "Sprint", "id=77"),
+            event("2", 0, "2026-08-30T00:01:00+00:00", "status", "1"),
+            # one Jira edit changes status and points together: same timestamp,
+            # same changelog entry — item_index orders it, so not ambiguous
+            event("3", 0, "2026-09-02T00:00:00+00:00", "status", "5"),
+            event("3", 1, "2026-09-02T00:00:00+00:00", "Story Points", "3"),
+        ],
+        config=config,
+        sprint=sprint,
+        cutoff_at=datetime(2026, 9, 20, tzinfo=UTC),
+    )
+
+    assert metrics["status"] == "final"
+    assert metrics["ambiguous_ordering"] == []
+    # points were set at the start boundary, not before it
+    assert metrics["committed"]["issues"][0]["start_estimate"] is None
+    assert metrics["committed"]["issues"][0]["completed_during_sprint"] is True

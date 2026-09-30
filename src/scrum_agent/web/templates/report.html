@@ -54,6 +54,28 @@
   </table>
 </section>
 
+{% if report.history %}
+<section class="report-history">
+  <h3>Historical evidence ({{ report.history.status }})</h3>
+  {% if report.history.status == "unavailable" %}
+  <p>Historical metrics are unavailable: {{ report.history.missing_evidence | join("; ") }}.</p>
+  {% else %}
+  <table>
+    <tbody>
+      <tr><th>Committed at sprint start</th><td>{{ report.history.committed.count }}</td></tr>
+      <tr><th>Completed during sprint</th><td>{{ report.history.completion.completed_during_sprint }}</td></tr>
+      <tr><th>Done by sprint end</th><td>{{ report.history.completion.done_by_end }}</td></tr>
+      <tr><th>Scope additions / removals</th><td>{{ report.history.scope_changes.added | length }} / {{ report.history.scope_changes.removed | length }}</td></tr>
+      <tr><th>Reopened</th><td>{{ report.history.completion.reopened | join(", ") or "none" }}</td></tr>
+      <tr><th>Rollover</th><td>{{ report.history.completion.rollover | join(", ") or "none" }}</td></tr>
+    </tbody>
+  </table>
+  {% if report.history.missing_evidence %}<p class="note">Missing evidence: {{ report.history.missing_evidence | join("; ") }}</p>{% endif %}
+  {% if report.history.ambiguous_ordering %}<p class="note">Ambiguous changelog ordering: {{ report.history.ambiguous_ordering | join(", ") }}</p>{% endif %}
+  {% endif %}
+</section>
+{% endif %}
+
 <section class="report-issues">
   <h3>Issues</h3>
   <table>

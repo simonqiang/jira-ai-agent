@@ -136,7 +136,7 @@ class ReportJobs:
         storage.finish_report_job(job_id, status="done", report=report)
 
     def _build(self, board_id: int, sprint_id: int) -> dict:
-        from scrum_agent.reports.metrics import build_report
+        from scrum_agent.reports.metrics import build_narrative, build_report
 
         client = self.client()
         storage = self.storage()
@@ -158,7 +158,7 @@ class ReportJobs:
 
         from scrum_agent.sync.freshness import freshness_report as report_freshness
 
-        return build_report(
+        report = build_report(
             snapshot_rows=snapshot_rows,
             accessible_keys=accessible,
             config=config,
@@ -168,6 +168,29 @@ class ReportJobs:
             freshness=report_freshness(storage, self._settings),
             cutoff_at=datetime.now(UTC),
         )
+        if sprint.is_closed:
+            from scrum_agent.reports.history import build_historical_metrics
+
+            report["history"] = build_historical_metrics(
+                snapshot_rows=snapshot_rows,
+                event_rows=storage.events_for_issue_ids([row["issue_id"] for row in snapshot_rows]),
+                config=config,
+                sprint=sprint,
+                cutoff_at=datetime.now(UTC),
+            )
+            if report["history"]["status"] != "final":
+                report["completeness"] = "partial"
+                report["completeness_notes"].extend(
+                    f"historical evidence: {item}"
+                    for item in report["history"].get("missing_evidence", ())
+                )
+                report["completeness_notes"].extend(
+                    f"historical evidence has ambiguous ordering for {item}"
+                    for item in report["history"].get("ambiguous_ordering", ())
+                )
+            report["metric_policy_version"] = report["history"]["policy_version"]
+            report["narrative"] = build_narrative(report)
+        return report
 
 
 async def run_forever(jobs: ReportJobs, interval_seconds: float = 1.0) -> None:

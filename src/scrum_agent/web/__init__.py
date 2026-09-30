@@ -196,11 +196,11 @@ def create_app(settings: Settings, chat: ChatService, jobs=None) -> FastAPI:
     async def healthz() -> JSONResponse:
         return JSONResponse({"status": "ok"})
 
-    # -- reports (Week 5) ------------------------------------------------------
+    # -- reports (Weeks 5-6) ---------------------------------------------------
 
     @app.get("/reports", response_class=HTMLResponse)
     async def reports_page(request: Request, error: str = "") -> HTMLResponse:
-        sprints = chat.service.list_sprints(states=("active", "future"))
+        sprints = chat.service.list_sprints(states=("active", "future", "closed"))
         return templates.TemplateResponse(
             request=request,
             name="reports.html",
