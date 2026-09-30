@@ -9,7 +9,7 @@ never touches live Jira.
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from importlib import resources
 
 import pytest
@@ -159,3 +159,89 @@ def test_migrations_and_repository_round_trip() -> None:
     assert storage.claim_next_report_job() is None
 
     conn.close()
+
+
+def test_ticket_approvals_migration_matches_schema_contract() -> None:
+    sql = (
+        resources.files("scrum_agent")
+        .joinpath("migrations")
+        .joinpath("003_ticket_approvals.sql")
+        .read_text()
+    )
+    for table in (
+        "scrum_agent.ticket_drafts",
+        "scrum_agent.ticket_approvals",
+        "scrum_agent.ticket_executions",
+    ):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
+    # Payloads are frozen objects; the marker and the approval pin replay safety.
+    assert "CHECK (jsonb_typeof(payload) = 'object')" in sql
+    assert "correlation_marker text NOT NULL UNIQUE" in sql
+    assert "CHECK (expires_at > approved_at)" in sql
+    assert "UNIQUE REFERENCES scrum_agent.ticket_approvals" in sql
+    assert "CHECK (status IN ('executing', 'succeeded', 'outcome_unknown'))" in sql
+
+
+@requires_db
+def test_ticket_approval_records_round_trip() -> None:
+    import psycopg
+    from psycopg.rows import dict_row
+
+    from scrum_agent.storage.db import run_migrations
+    from scrum_agent.storage.repository import PgStorage
+
+    conn = psycopg.connect(
+        _TEST_DSN, row_factory=dict_row, options="-c timezone=UTC", autocommit=True
+    )
+    with conn.cursor() as cur:
+        cur.execute("DROP SCHEMA IF EXISTS scrum_agent CASCADE")
+        cur.execute("DROP TABLE IF EXISTS public.schema_migrations")
+    assert "003_ticket_approvals.sql" in run_migrations(conn)
+
+    storage = PgStorage(conn)
+    moment = datetime(2026, 10, 1, tzinfo=UTC)
+    draft_id = storage.create_draft(
+        creator="local-pilot",
+        issue_type="Bug",
+        template_version="2026-10",
+        payload={"summary": "S"},
+        payload_hash="hash-1",
+        correlation_marker="scrum-agent-req-m1",
+        created_at=moment,
+    )
+    draft = storage.get_draft(draft_id)
+    assert draft["payload"] == {"summary": "S"}  # jsonb round-trips as a dict
+    assert draft["payload_hash"] == "hash-1"
+
+    approval_id = storage.create_approval(
+        draft_id=draft_id,
+        approver="local-pilot",
+        payload_hash="hash-1",
+        approved_at=moment,
+        expires_at=moment + timedelta(minutes=15),
+    )
+    assert storage.get_approval(approval_id)["payload_hash"] == "hash-1"
+
+    execution_id = storage.create_execution(
+        approval_id=approval_id,
+        payload_hash="hash-1",
+        correlation_marker="scrum-agent-req-m1",
+        status="executing",
+        started_at=moment,
+    )
+    assert storage.get_execution_by_approval(approval_id)["status"] == "executing"
+    storage.update_execution(
+        execution_id, status="succeeded", issue_key="PAY-9", reconciled=True, finished_at=moment
+    )
+    done = storage.get_execution_by_approval(approval_id)
+    assert (done["status"], done["issue_key"], done["reconciled"]) == ("succeeded", "PAY-9", True)
+
+    # One execution per approval: a replay cannot open a second create attempt.
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        storage.create_execution(
+            approval_id=approval_id,
+            payload_hash="hash-1",
+            correlation_marker="scrum-agent-req-m1",
+            status="executing",
+            started_at=moment,
+        )

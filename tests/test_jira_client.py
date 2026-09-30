@@ -721,3 +721,127 @@ def test_iter_issue_changelog_surfaces_rate_limit_without_retry() -> None:
     with pytest.raises(JiraRateLimitedError) as caught:
         list(client.iter_issue_changelog("PAY-1"))
     assert caught.value.retry_after == 7.0
+
+
+# -- approved ticket creation (Week 8) ---------------------------------------------
+
+CREATE_FIELD_IDS = ("project", "issuetype", "summary", "description", "labels")
+
+
+def createmeta_handler(created: list[dict]):
+    """Serve create metadata for Bug plus a POST create route recording payloads."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path == "/rest/api/3/issue":
+            created.append(json.loads(request.content)["fields"])
+            return ok({"id": "10090", "key": "PAY-90"})
+        if path == "/rest/api/3/issue/createmeta/PAY/issuetypes":
+            return ok({"values": [{"id": "10001", "name": "Bug"}]})
+        if path == "/rest/api/3/issue/createmeta/PAY/issuetypes/10001":
+            return ok({"fields": [{"fieldId": field_id} for field_id in CREATE_FIELD_IDS]})
+        raise AssertionError(f"unexpected request {path}")
+
+    return handler
+
+
+def ticket_payload(**overrides: object) -> dict:
+    payload: dict = {
+        "project": {"key": "PAY"},
+        "issuetype": {"name": "Bug"},
+        "summary": "Export fails",
+        "description": "Steps to reproduce.",
+        "labels": ["scrum-agent-req-00000000-0000-0000-0000-000000000000"],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_create_issue_posts_exact_fields_and_returns_identity() -> None:
+    created: list[dict] = []
+    client, requests = make_client(createmeta_handler(created))
+    payload = ticket_payload()
+
+    assert client.create_issue(payload) == {"id": "10090", "key": "PAY-90"}
+    assert created == [payload]
+    assert json.loads(requests[0].content) == {"fields": payload}
+
+
+def test_create_issue_rejects_response_without_identity() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return ok({"id": "10090"})  # key omitted
+
+    with pytest.raises(JiraApiError, match="identity"):
+        make_client(handler)[0].create_issue(ticket_payload())
+
+
+def test_validate_create_fields_blocks_foreign_project_before_http() -> None:
+    client, requests = make_client(lambda request: ok({}))
+
+    with pytest.raises(JiraApiError, match="unexpected project"):
+        client.validate_create_fields("Bug", ticket_payload(project={"key": "OTHER"}))
+    assert requests == []
+
+
+def test_validate_create_fields_accepts_permitted_metadata() -> None:
+    client, requests = make_client(createmeta_handler([]))
+
+    client.validate_create_fields("Bug", ticket_payload())
+    assert [request.url.path for request in requests] == [
+        "/rest/api/3/issue/createmeta/PAY/issuetypes",
+        "/rest/api/3/issue/createmeta/PAY/issuetypes/10001",
+    ]
+
+
+def test_validate_create_fields_rejects_unavailable_issue_type() -> None:
+    client, requests = make_client(createmeta_handler([]))
+
+    with pytest.raises(JiraApiError, match="issue type 'Task'"):
+        client.validate_create_fields("Task", ticket_payload())
+    assert len(requests) == 1  # no field metadata fetched for a missing type
+
+
+def test_validate_create_fields_rejects_metadata_missing_required_field() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/issuetypes"):
+            return ok({"values": [{"id": "10001", "name": "Bug"}]})
+        return ok({"fields": [{"fieldId": field_id} for field_id in CREATE_FIELD_IDS[:4]]})
+
+    with pytest.raises(JiraApiError, match="labels"):
+        make_client(handler)[0].validate_create_fields("Bug", ticket_payload())
+
+
+def test_find_by_marker_returns_single_match() -> None:
+    issue = {**ISSUE_PAYLOAD, "id": "10090", "key": "PAY-90"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/rest/api/3/search/jql"
+        return ok({"issues": [issue], "nextPageToken": None})
+
+    marker = "scrum-agent-req-00000000-0000-0000-0000-000000000000"
+    assert make_client(handler)[0].find_by_marker(marker) == {"id": "10090", "key": "PAY-90"}
+
+
+def test_find_by_marker_rejects_malformed_marker_before_http() -> None:
+    client, requests = make_client(lambda request: ok({"issues": []}))
+
+    with pytest.raises(JiraApiError, match="marker"):
+        client.find_by_marker('labels-injection" OR key IS NOT EMPTY')
+    assert requests == []
+
+
+def test_find_by_marker_refuses_ambiguous_matches() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return ok(
+            {
+                "issues": [
+                    ISSUE_PAYLOAD,
+                    {**ISSUE_PAYLOAD, "key": "PAY-2", "id": "10002"},
+                ],
+                "nextPageToken": None,
+            }
+        )
+
+    marker = "scrum-agent-req-00000000-0000-0000-0000-000000000000"
+    with pytest.raises(JiraApiError, match="multiple issues"):
+        make_client(handler)[0].find_by_marker(marker)
