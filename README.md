@@ -6,13 +6,15 @@ sprint reports and preparing clear Jira tickets. Design and weekly roadmap:
 - [Product requirements and architecture](docs/superpowers/specs/2026-09-27-scrum-master-agent-design.md)
 - [Weekly implementation roadmap](docs/superpowers/plans/2026-09-27-weekly-delivery-roadmap.md)
 
-Status: **Week 6 — trustworthy historical sprint reports in implementation**. Week 1's
+Status: **Week 7 — drafting tickets from team-standard templates**. Week 1's
 live issue and board reads work for board 23031; Week 2 adds sprint selection, typed
 filters, centralized pilot-scope checks and a checked query set; Week 3 ships the
 local read-only ADK chat. Week 4 stores issue snapshots, changelog events, board
-configuration versions and collection checkpoints in a local PostgreSQL database —
-see the [Week 3 note](docs/superpowers/notes/2026-09-29-week-3.md) and the
-[Week 2 note](docs/superpowers/notes/2026-09-27-week-2.md).
+configuration versions and collection checkpoints in a local PostgreSQL database;
+Week 5-6 compute current-sprint and evidence-backed historical sprint reports.
+Week 7 adds versioned Story/Bug/Task templates and editable draft generation that
+never invents content — see the [Week 6 note](docs/superpowers/notes/2026-10-01-week-6.md)
+and the [Week 3 note](docs/superpowers/notes/2026-09-29-week-3.md).
 
 The intended runtime is a **local PC application**. Google Cloud deployment, public
 webhooks and a hosted collector are not required. Google ADK may call a configured
@@ -247,6 +249,26 @@ details **and** totals and the report is labeled partial.
 scrum-agent report --sprint "Payments R2"              # submit + run worker inline, print Markdown
 scrum-agent report --sprint 78 --format csv --out r.csv  # CSV export to a file
 ```
+
+### Drafting tickets (Week 7)
+
+Two read-only ADK tools turn a rough request into an editable Story, Bug or
+Task draft; drafting never writes to Jira. Templates are versioned YAML under
+`src/scrum_agent/drafting/ticket_templates/` (`scrum_agent.drafting.load_templates`),
+each field tagged `required_field` (Jira needs it), `team_policy` (this team
+always requires it — for example a Bug's reproduction steps and verification
+criteria) or `advisory` (an optional writing suggestion).
+
+- `list_draft_templates` returns every template's fields and categories so the
+  agent knows exactly what to ask for.
+- `draft_ticket(issue_type, fields)` renders the draft from only the text the
+  user gave; any missing `required_field`/`team_policy` field comes back as an
+  explicit `open_questions` entry instead of invented content, and `ready` is
+  `true` only once every one of those fields is filled. Advisory gaps are
+  listed as suggestions and never block readiness.
+
+Creating the ticket in Jira after approval is Week 8; similar-ticket
+suggestions during drafting are Week 11.
 
 The web UI adds `/reports`: pick a sprint, watch the job, view the report
 (HTML-escaped) and download the same authorized result as Markdown or CSV. In

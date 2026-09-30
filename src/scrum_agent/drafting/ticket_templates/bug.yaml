@@ -1,0 +1,35 @@
+issue_type: Bug
+version: bug-v1
+fields:
+  - key: summary
+    label: Observable problem
+    category: required_field
+    question: "What is the observable problem, in one or two sentences?"
+  - key: environment
+    label: Environment / version
+    category: team_policy
+    question: "Which environment/version does this affect (production, staging, a specific release)?"
+  - key: steps_to_reproduce
+    label: Steps to reproduce
+    category: team_policy
+    question: "What are the exact steps to reproduce this bug?"
+  - key: expected
+    label: Expected
+    category: required_field
+    question: "What did you expect to happen?"
+  - key: actual
+    label: Actual
+    category: required_field
+    question: "What actually happened?"
+  - key: impact
+    label: Impact
+    category: team_policy
+    question: "Who/what is affected and how severely (user-facing, data loss, workaround available)?"
+  - key: evidence
+    label: "Evidence (links, logs)"
+    category: advisory
+    hint: "Attach anonymized logs, screenshots or links that support the report."
+  - key: verification_criteria
+    label: Verification criteria
+    category: team_policy
+    question: "How will we verify this bug is fixed?"

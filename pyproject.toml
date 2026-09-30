@@ -19,6 +19,7 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "asyncpg>=0.29",
     "sqlalchemy[asyncio]>=2,<3",
+    "pyyaml>=6.0,<7",
 ]
 
 [project.optional-dependencies]
@@ -36,7 +37,12 @@ scrum-agent = "scrum_agent.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-scrum_agent = ["web/templates/*.html", "web/static/*", "migrations/*.sql"]
+scrum_agent = [
+    "web/templates/*.html",
+    "web/static/*",
+    "migrations/*.sql",
+    "drafting/ticket_templates/*.yaml",
+]
 
 [tool.ruff]
 line-length = 100

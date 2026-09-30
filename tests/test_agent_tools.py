@@ -13,7 +13,7 @@ import pytest
 
 from scrum_agent.agent.tools import make_tools
 from scrum_agent.jira.models import Issue
-from tests.agent_fakes import tools_over
+from tests.agent_fakes import service_over, tools_over
 from tests.checked_queries import (
     DEFAULT_ISSUES,
     FakeJira,
@@ -29,6 +29,8 @@ READ_ONLY_TOOL_NAMES = {
     "search_sprint",
     "build_sprint_report",
     "get_report",
+    "list_draft_templates",
+    "draft_ticket",
 }
 
 
@@ -392,3 +394,53 @@ def test_foreign_sprint_fixture_stays_on_foreign_board() -> None:
     # Guard the fixture this suite depends on: sprint 81 stays on board 99.
     jira = _with_foreign_sprint()
     assert any(sprint.origin_board_id == 99 and sprint.id == 81 for sprint in jira.sprints)
+
+
+# -- Week 7: drafting tools (never touch Jira) -------------------------------
+
+
+def test_list_draft_templates_returns_field_categories_with_no_sources() -> None:
+    with tools_over(FakeJira()) as tools:
+        payload = tools["list_draft_templates"]()
+    assert payload["ok"] is True
+    assert payload["sources"] == []
+    types_ = {item["issue_type"] for item in payload["templates"]}
+    assert types_ == {"Story", "Bug", "Task"}
+    bug = next(item for item in payload["templates"] if item["issue_type"] == "Bug")
+    categories = {field["key"]: field["category"] for field in bug["fields"]}
+    assert categories["steps_to_reproduce"] == "team_policy"
+    assert categories["evidence"] == "advisory"
+
+
+def test_draft_ticket_never_calls_jira() -> None:
+    with service_over(FakeJira()) as probe:
+        tools = {tool.name: tool.func for tool in make_tools(probe.service)}
+        payload = tools["draft_ticket"](issue_type="Story", fields={"role": "analyst"})
+    assert payload["ok"] is True
+    assert payload["sources"] == []
+    assert probe.requests == []  # drafting made zero HTTP calls
+
+
+def test_draft_ticket_incomplete_input_returns_open_questions_not_invented_content() -> None:
+    with tools_over(FakeJira()) as tools:
+        payload = tools["draft_ticket"](issue_type="Bug", fields={"summary": "pool exhausted"})
+    assert payload["ok"] is True
+    assert payload["ready"] is False
+    assert "steps_to_reproduce" in payload["missing_team_policy_fields"]
+    question_keys = {q["key"] for q in payload["open_questions"]}
+    assert "steps_to_reproduce" in question_keys
+    assert "verification_criteria" in question_keys
+
+
+def test_draft_ticket_unknown_issue_type_is_invalid_input() -> None:
+    with tools_over(FakeJira()) as tools:
+        payload = tools["draft_ticket"](issue_type="Epic", fields={})
+    assert payload["ok"] is False
+    assert payload["error"]["kind"] == "invalid_input"
+
+
+def test_draft_ticket_accepts_no_fields() -> None:
+    with tools_over(FakeJira()) as tools:
+        payload = tools["draft_ticket"](issue_type="Task")
+    assert payload["ok"] is True
+    assert payload["ready"] is False

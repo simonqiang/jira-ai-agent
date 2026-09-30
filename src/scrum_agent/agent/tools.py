@@ -1,14 +1,16 @@
 """Narrow, read-only ADK tools over the Week 2 search service.
 
 Four search tools (``get_issue``, ``list_sprints``, ``search_issues``,
-``search_sprint``) plus the two Week 5 report tools
-(``build_sprint_report``/``get_report``), which never block the conversation:
-building returns a job handle and polling returns status or the finished
-report. Inputs are plain JSON primitives (ADK's argument coercion swallows
+``search_sprint``), the two Week 5 report tools (``build_sprint_report``/
+``get_report``), which never block the conversation, and the two Week 7
+drafting tools (``list_draft_templates``/``draft_ticket``), which turn
+user-supplied text into an editable Story/Bug/Task draft and never write to
+Jira. Inputs are plain JSON primitives (ADK's argument coercion swallows
 ``ValidationError`` for model classes, so ``IssueFilters`` is built inside each
 tool); outputs are structured payloads. No tool accepts raw JQL, credentials
-or any write parameter, and no tool can widen scope: every call delegates to
-``SearchService``/``ReportJobs``, which enforce ``PilotScope`` end to end.
+or any write parameter, and no tool can widen scope: every Jira-backed call
+delegates to ``SearchService``/``ReportJobs``, which enforce ``PilotScope`` end
+to end; drafting tools never touch Jira at all.
 """
 
 from __future__ import annotations
@@ -20,10 +22,13 @@ from google.adk.tools import FunctionTool
 from scrum_agent.agent.payloads import (
     error_payload,
     normalize_states,
+    ok_draft_payload,
     ok_issue_payload,
     ok_search_payload,
     ok_sprints_payload,
+    ok_templates_payload,
 )
+from scrum_agent.drafting import build_draft, default_templates, get_template
 from scrum_agent.reports.jobs import job_view
 from scrum_agent.search.filters import IssueFilters
 from scrum_agent.search.service import SearchService
@@ -195,6 +200,41 @@ def make_tools(service: SearchService, jobs=None) -> list[FunctionTool]:
         except Exception as exc:
             return error_payload("get_report", exc)
 
+    def list_draft_templates() -> dict:
+        """List the Week 7 draft templates (Story, Bug, Task) with their fields.
+
+        Each field carries its category: required_field (Jira needs it),
+        team_policy (this team always requires it, e.g. Bug repro/verification)
+        or advisory (optional writing suggestion). Use this to know exactly
+        what to ask the user for before calling draft_ticket; never invent an
+        answer for a required_field or team_policy field yourself.
+        """
+        try:
+            return ok_templates_payload("list_draft_templates", default_templates())
+        except Exception as exc:
+            return error_payload("list_draft_templates", exc)
+
+    def draft_ticket(issue_type: str, fields: dict[str, str] | None = None) -> dict:
+        """Render an editable ticket draft; makes no Jira changes.
+
+        issue_type must exactly match a template from list_draft_templates
+        (Story, Bug or Task). fields maps each template field's key to the
+        exact text the user gave you — never invent, estimate or paraphrase
+        missing content. Any required_field/team_policy field you omit comes
+        back in open_questions: ask the user those questions and call this
+        tool again with the answers. ready is true only once every
+        required_field and team_policy field is filled; advisory gaps never
+        block readiness.
+        """
+        try:
+            template = get_template(default_templates(), _text(issue_type, "issue_type"))
+            if fields is not None and not isinstance(fields, dict):
+                raise ValueError("fields must be a mapping of field key to text")
+            draft = build_draft(template, fields)
+            return ok_draft_payload("draft_ticket", draft)
+        except Exception as exc:
+            return error_payload("draft_ticket", exc)
+
     return [
         FunctionTool(func=get_issue),
         FunctionTool(func=list_sprints),
@@ -202,4 +242,6 @@ def make_tools(service: SearchService, jobs=None) -> list[FunctionTool]:
         FunctionTool(func=search_sprint),
         FunctionTool(func=build_sprint_report),
         FunctionTool(func=get_report),
+        FunctionTool(func=list_draft_templates),
+        FunctionTool(func=draft_ticket),
     ]

@@ -1,0 +1,35 @@
+issue_type: Story
+version: story-v1
+fields:
+  - key: role
+    label: Role
+    category: required_field
+    question: "Who is the user/role that wants this (the 'As a <role>' part)?"
+  - key: goal
+    label: Goal
+    category: required_field
+    question: "What do they want (the 'I want <goal>' part)?"
+  - key: benefit
+    label: Benefit
+    category: required_field
+    question: "Why do they want it (the 'so that <benefit>' part)?"
+  - key: context
+    label: Context / business need
+    category: advisory
+    hint: "Add the business context: what problem this solves and its current impact."
+  - key: scope
+    label: "Scope / Out of scope"
+    category: team_policy
+    question: "What is explicitly in scope and out of scope for this story?"
+  - key: acceptance_criteria
+    label: Acceptance criteria
+    category: team_policy
+    question: "What are the acceptance criteria (the checks that confirm this is done)?"
+  - key: dependencies
+    label: Dependencies
+    category: advisory
+    hint: "Note any dependencies on other tickets, teams or systems, or state none."
+  - key: open_questions
+    label: Open questions
+    category: advisory
+    hint: "List anything still undecided (for example limits, edge-case behaviour)."
