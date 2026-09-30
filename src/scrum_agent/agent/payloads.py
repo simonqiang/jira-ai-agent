@@ -101,6 +101,44 @@ def ok_sprints_payload(tool: str, sprints: tuple[Sprint, ...]) -> dict:
     }
 
 
+def ok_templates_payload(tool: str, templates: dict) -> dict:
+    """List every Week 7 draft template with its fields and categories."""
+    return {
+        "ok": True,
+        "tool": tool,
+        "templates": [
+            {
+                "issue_type": template.issue_type,
+                "version": template.version,
+                "fields": [
+                    {
+                        "key": field.key,
+                        "label": field.label,
+                        "category": field.category,
+                        "question": field.question,
+                        "hint": field.hint,
+                    }
+                    for field in template.fields
+                ],
+            }
+            for template in templates.values()
+        ],
+        "fetched_at": _now_iso(),
+        "sources": [],
+    }
+
+
+def ok_draft_payload(tool: str, draft: dict) -> dict:
+    """A rendered ticket draft; drafting makes no Jira changes, so no sources."""
+    return {
+        "ok": True,
+        "tool": tool,
+        **draft,
+        "fetched_at": _now_iso(),
+        "sources": [],
+    }
+
+
 def error_payload(tool: str, exc: Exception) -> dict:
     """Translate any exception into a structured, model-actionable payload.
 

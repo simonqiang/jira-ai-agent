@@ -170,10 +170,10 @@ These are future paths to guide implementation; this planning task does not crea
 
 **Weekly goal:** “I can turn a rough request into a useful Story, Bug or Task draft.”
 
-- [ ] Add versioned templates based on the Week 1 examples and project/type field metadata. Store them as versioned YAML in the repository with the version recorded at load time; no administrative UI in the pilot.
-- [ ] Generate editable drafts with context, scope, acceptance criteria, dependencies and open questions appropriate to the issue type.
-- [ ] Separate required Jira fields, mandatory team policy and advisory writing suggestions. Retrieve mandatory templates by exact identity/version.
-- [ ] Review at least two examples of each issue type, including incomplete input; require questions instead of invented business rules, estimates or bug evidence.
+- [x] Add versioned templates based on the Week 1 examples and project/type field metadata. Store them as versioned YAML in the repository with the version recorded at load time; no administrative UI in the pilot. *(`drafting/ticket_templates/*.yaml`, loaded once via `load_templates`/`default_templates`; each carries its own `version` string, e.g. `story-v1`. Fields reflect the Week 1 examples' observed structure and this project's known mandatory content; no live createmeta call — editing the YAML and bumping the version is the pilot's "admin UI".)*
+- [x] Generate editable drafts with context, scope, acceptance criteria, dependencies and open questions appropriate to the issue type. *(`drafting/draft.py:build_draft` renders every template section, plus `open_questions` for unmet required/team-policy fields.)*
+- [x] Separate required Jira fields, mandatory team policy and advisory writing suggestions. Retrieve mandatory templates by exact identity/version. *(Each template field carries a `category`: `required_field`, `team_policy` or `advisory`; `get_template` requires an exact case-insensitive issue-type match, never a fuzzy guess.)*
+- [x] Review at least two examples of each issue type, including incomplete input; require questions instead of invented business rules, estimates or bug evidence. *(`tests/test_drafting.py` covers a complete and an incomplete example per type, mirroring the Week 1 `docs/samples/*.example.md` gaps; missing content always becomes an `open_questions` entry, never invented text.)*
 
 **Friday demo:** Turn an incomplete feature request into a draft, answer its missing-information questions and inspect the revised result.
 

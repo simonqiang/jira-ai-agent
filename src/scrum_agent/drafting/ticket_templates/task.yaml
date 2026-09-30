@@ -1,0 +1,23 @@
+issue_type: Task
+version: task-v1
+fields:
+  - key: objective
+    label: Title / objective
+    category: required_field
+    question: "What is the objective of this task, in one sentence?"
+  - key: context
+    label: Context
+    category: advisory
+    hint: "Add background: who is requesting this and why now."
+  - key: scope
+    label: "Scope / Deliverables"
+    category: team_policy
+    question: "What is in scope, and what are the concrete deliverables?"
+  - key: dependencies
+    label: Dependencies
+    category: advisory
+    hint: "Note any dependencies on other tickets, teams or systems, or state none."
+  - key: completion_checklist
+    label: Completion checklist
+    category: team_policy
+    question: "What checklist confirms this task is complete?"
