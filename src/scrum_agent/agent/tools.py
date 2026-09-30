@@ -205,9 +205,9 @@ def make_tools(service: SearchService, jobs=None) -> list[FunctionTool]:
 
         Each field carries its category: required_field (Jira needs it),
         team_policy (this team always requires it, e.g. Bug repro/verification)
-        or advisory (optional writing suggestion). Use this to know exactly
-        what to ask the user for before calling draft_ticket; never invent an
-        answer for a required_field or team_policy field yourself.
+        or advisory (optional writing suggestion). Use this to see which
+        fields a draft_ticket call still needs; propose concrete values for
+        missing ones rather than interrogating the user.
         """
         try:
             return ok_templates_payload("list_draft_templates", default_templates())
@@ -218,13 +218,13 @@ def make_tools(service: SearchService, jobs=None) -> list[FunctionTool]:
         """Render an editable ticket draft; makes no Jira changes.
 
         issue_type must exactly match a template from list_draft_templates
-        (Story, Bug or Task). fields maps each template field's key to the
-        exact text the user gave you — never invent, estimate or paraphrase
-        missing content. Any required_field/team_policy field you omit comes
-        back in open_questions: ask the user those questions and call this
-        tool again with the answers. ready is true only once every
-        required_field and team_policy field is filled; advisory gaps never
-        block readiness.
+        (Story, Bug or Task). fields maps each template field's key to text:
+        the user's exact words where they gave them, otherwise your clearly
+        labelled proposal. Any required_field/team_policy field you omit comes
+        back in open_questions: propose a concrete value for each instead of
+        asking the user to write it, then call this tool again with the text
+        they accepted. ready is true only once every required_field and
+        team_policy field is filled; advisory gaps never block readiness.
         """
         try:
             template = get_template(default_templates(), _text(issue_type, "issue_type"))
