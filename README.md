@@ -165,6 +165,13 @@ snapshots, dedup-keyed changelog events, board-configuration versions and
 collection checkpoints. Polling results are hints only; the overlap window and
 per-issue reconciliation absorb Jira indexing lag and clock skew.
 
+Direct issue lookups in chat and `search --issue` display description,
+acceptance criteria, subtasks, linked work items, assignee, reporter, labels,
+due date, severity, risk rating, issue rating and priority when Jira supplies
+them. The configured pilot uses `customfield_10350` for Acceptance Criteria,
+`customfield_10199` for Severity, `customfield_10263` for Risk Rating and
+`customfield_10249` for Issue Rating.
+
 ```bash
 docker compose up -d            # local PostgreSQL (loopback only; pgvector image)
 scrum-agent migrate             # apply pending SQL migrations (idempotent)

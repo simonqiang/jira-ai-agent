@@ -228,6 +228,11 @@ def test_search_by_issue_key(monkeypatch, capsys) -> None:
     output = capsys.readouterr().out
     assert "PAY-1" in output
     assert "https://test.atlassian.net/browse/PAY-1" in output
+    assert "Description: Repro steps" in output
+    assert "Acceptance Criteria: No duplicate charge" in output
+    assert "Subtasks:" in output
+    assert "Linked Work Items:" in output
+    assert "Severity: Critical" in output
 
 
 def test_search_requires_issue_or_a_filter(monkeypatch, capsys) -> None:

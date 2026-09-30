@@ -34,16 +34,29 @@ from scrum_agent.jira.models import (
 
 _T = TypeVar("_T")
 
-_SEARCH_FIELDS = ["summary", "status", "issuetype", "assignee", "updated"]
-
-# Curated field list for the collector's authoritative per-issue read; the
-# board-specific estimate field is appended per run via extra_fields.
-_ISSUE_DETAIL_FIELDS = [
+_ISSUE_FIELDS = [
     "summary",
     "status",
     "issuetype",
     "assignee",
+    "reporter",
+    "labels",
+    "duedate",
+    "priority",
+    "description",
+    "customfield_10350",  # Acceptance Criteria
+    "subtasks",
+    "issuelinks",
+    "customfield_10199",  # Severity
+    "customfield_10263",  # Risk Rating
+    "customfield_10249",  # Issue Rating
     "updated",
+]
+
+# Curated field list for the collector's authoritative per-issue read; the
+# board-specific estimate field is appended per run via extra_fields.
+_ISSUE_DETAIL_FIELDS = [
+    *_ISSUE_FIELDS,
     "created",
     "resolution",
     "labels",
@@ -160,7 +173,10 @@ class JiraClient:
     def get_issue(self, issue_key: str) -> Issue:
         self._check_issue_scope(issue_key)
         issue = self._parse_response(
-            Issue.from_api, self._request("GET", f"/rest/api/3/issue/{issue_key}")
+            Issue.from_api,
+            self._request(
+                "GET", f"/rest/api/3/issue/{issue_key}", params={"fields": ",".join(_ISSUE_FIELDS)}
+            ),
         )
         self._check_issue_scope(issue.key)  # Jira may resolve a moved issue's old key.
         return issue
@@ -350,7 +366,7 @@ class JiraClient:
             body: dict[str, Any] = {
                 "jql": self._scoped_jql(jql),
                 "maxResults": max_results_per_page,
-                "fields": _SEARCH_FIELDS,
+                "fields": _ISSUE_FIELDS,
             }
             if token is not None:
                 body["nextPageToken"] = token

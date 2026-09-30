@@ -28,8 +28,8 @@ from scrum_agent.search.models import SearchResult
 _VALID_SPRINT_STATES = ("future", "active", "closed")
 
 
-def _issue_payload(issue: Issue) -> dict:
-    return {
+def _issue_payload(issue: Issue, *, include_details: bool = False) -> dict:
+    payload = {
         "key": issue.key,
         "summary": issue.summary,
         "status": issue.status,
@@ -37,6 +37,21 @@ def _issue_payload(issue: Issue) -> dict:
         "assignee": issue.assignee,
         "updated": issue.updated,
     }
+    if include_details:
+        payload.update(
+            description=issue.description,
+            acceptance_criteria=issue.acceptance_criteria,
+            subtasks=[subtask.model_dump() for subtask in issue.subtasks],
+            linked_work_items=[item.model_dump() for item in issue.linked_work_items],
+            reporter=issue.reporter,
+            labels=list(issue.labels),
+            due_date=issue.due_date,
+            severity=issue.severity,
+            risk_rating=issue.risk_rating,
+            issue_rating=issue.issue_rating,
+            priority=issue.priority,
+        )
+    return payload
 
 
 def _sprint_payload(sprint: Sprint) -> dict:
@@ -67,7 +82,7 @@ def ok_issue_payload(tool: str, issue: Issue) -> dict:
         "ok": True,
         "tool": tool,
         "count": 1,
-        "issues": [_issue_payload(issue)],
+        "issues": [_issue_payload(issue, include_details=True)],
         "sprint": None,
         "jql": None,
         "fetched_at": _now_iso(),

@@ -164,13 +164,38 @@ def _sprints(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
-def _print_issue(settings: Settings, issue) -> None:
+def _print_issue(settings: Settings, issue, *, include_details: bool = False) -> None:
     print(f"\n{issue.key}: {issue.summary}")
     print(f"  link=https://{settings.jira_site}/browse/{issue.key}")
     print(f"  status={issue.status} type={issue.issue_type}", end="")
     if issue.updated:
         print(f" updated={issue.updated}", end="")
     print()
+    if not include_details:
+        return
+    for label, value in (
+        ("Description", issue.description),
+        ("Acceptance Criteria", issue.acceptance_criteria),
+        ("Assignee", issue.assignee),
+        ("Reporter", issue.reporter),
+        ("Labels", ", ".join(issue.labels) if issue.labels else None),
+        ("Due date", issue.due_date),
+        ("Severity", issue.severity),
+        ("Risk Rating", issue.risk_rating),
+        ("Issue Rating", issue.issue_rating),
+        ("Priority", issue.priority),
+    ):
+        if value:
+            print(f"  {label}: {value}")
+    if issue.subtasks:
+        print("  Subtasks:")
+        for subtask in issue.subtasks:
+            priority = f", priority={subtask.priority}" if subtask.priority else ""
+            print(f"    {subtask.key}: {subtask.summary} [{subtask.status}{priority}]")
+    if issue.linked_work_items:
+        print("  Linked Work Items:")
+        for item in issue.linked_work_items:
+            print(f"    {item.relationship}: {item.key} {item.summary} [{item.status}]")
 
 
 def _search(settings: Settings, args: argparse.Namespace) -> int:
@@ -184,7 +209,7 @@ def _search(settings: Settings, args: argparse.Namespace) -> int:
         service = SearchService(client)
 
         if args.issue:
-            _print_issue(settings, service.get_issue(args.issue))
+            _print_issue(settings, service.get_issue(args.issue), include_details=True)
             print("\n1 issue.")
             return 0
 

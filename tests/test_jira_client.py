@@ -26,6 +26,44 @@ ISSUE_PAYLOAD = {
         "status": {"name": "In Progress"},
         "issuetype": {"name": "Bug"},
         "assignee": {"displayName": "A. Developer"},
+        "reporter": {"displayName": "P. Manager"},
+        "labels": ["payments", "customer-impact"],
+        "duedate": "2026-10-15",
+        "priority": {"name": "High"},
+        "description": {
+            "type": "doc",
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "Repro steps"}]}
+            ],
+        },
+        "customfield_10350": {
+            "type": "doc",
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "No duplicate charge"}]}
+            ],
+        },
+        "subtasks": [
+            {
+                "key": "PAY-7",
+                "fields": {
+                    "summary": "Add regression test",
+                    "status": {"name": "To Do"},
+                    "priority": {"name": "Medium"},
+                },
+            }
+        ],
+        "issuelinks": [
+            {
+                "type": {"name": "Blocks", "outward": "blocks"},
+                "outwardIssue": {
+                    "key": "PAY-8",
+                    "fields": {"summary": "Release validation", "status": {"name": "To Do"}},
+                },
+            }
+        ],
+        "customfield_10199": {"value": "Critical"},
+        "customfield_10263": {"value": "High"},
+        "customfield_10249": {"value": "4"},
         "updated": "2026-09-27T08:00:00.000+0000",
     },
 }
@@ -83,6 +121,17 @@ def test_get_issue_parses_nested_fields() -> None:
     assert issue.status == "In Progress"
     assert issue.issue_type == "Bug"
     assert issue.assignee == "A. Developer"
+    assert issue.description == "Repro steps"
+    assert issue.acceptance_criteria == "No duplicate charge"
+    assert issue.reporter == "P. Manager"
+    assert issue.labels == ("payments", "customer-impact")
+    assert issue.due_date == "2026-10-15"
+    assert issue.severity == "Critical"
+    assert issue.risk_rating == "High"
+    assert issue.issue_rating == "4"
+    assert issue.priority == "High"
+    assert issue.subtasks[0].key == "PAY-7"
+    assert issue.linked_work_items[0].relationship == "blocks"
 
 
 def test_authorization_header_sent_basic_site() -> None:
@@ -91,6 +140,20 @@ def test_authorization_header_sent_basic_site() -> None:
     expected = base64.b64encode(b"sm@test.example:tok-test-123").decode()
     assert requests[0].headers["Authorization"] == f"Basic {expected}"
     assert requests[0].url.host == "test.atlassian.net"
+    fields = set(requests[0].url.params["fields"].split(","))
+    assert {
+        "description",
+        "customfield_10350",
+        "subtasks",
+        "issuelinks",
+        "reporter",
+        "labels",
+        "duedate",
+        "customfield_10199",
+        "customfield_10263",
+        "customfield_10249",
+        "priority",
+    } <= fields
 
 
 @pytest.mark.parametrize("auth_mode", ["basic_central", "bearer_central"])
@@ -101,8 +164,8 @@ def test_central_request_preserves_cloud_id_prefix_and_auth(auth_mode: str) -> N
         jira_cloud_id="test-cloud-id",
     )
     client.get_issue("PAY-1")
-    assert str(requests[0].url) == (
-        "https://api.atlassian.com/ex/jira/test-cloud-id/rest/api/3/issue/PAY-1"
+    assert str(requests[0].url).startswith(
+        "https://api.atlassian.com/ex/jira/test-cloud-id/rest/api/3/issue/PAY-1?"
     )
     if auth_mode == "basic_central":
         encoded = base64.b64encode(b"sm@test.example:tok-test-123").decode()
