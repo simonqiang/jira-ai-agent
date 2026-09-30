@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     model_max_tokens: int = Field(default=8192, ge=1024, le=32768)
     web_host: str = "127.0.0.1"
     web_port: int = Field(default=8741, ge=1, le=65535)
+    approval_user_id: str = Field(default="local-pilot", min_length=1, max_length=100)
 
     # Week 4: local collection storage and the credential-freshness alarm. Both
     # are optional so Week 1-3 commands keep working without a database;

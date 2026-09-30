@@ -32,6 +32,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 
 from scrum_agent.agent.chat import ChatService
 from scrum_agent.agent.usage import UsageSnapshot
@@ -106,6 +107,12 @@ def create_app(settings: Settings, chat: ChatService, jobs=None) -> FastAPI:
         openapi_url=None,
         lifespan=lifespan,
     )
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=settings.jira_api_token.get_secret_value(),
+        same_site="strict",
+        https_only=False,
+    )
     app.mount("/static", StaticFiles(directory=str(_PACKAGE_DIR / "static")), name="static")
 
     templates = Jinja2Templates(directory=str(_PACKAGE_DIR / "templates"))
@@ -116,6 +123,19 @@ def create_app(settings: Settings, chat: ChatService, jobs=None) -> FastAPI:
     templates.env.filters["localtime"] = lambda stamp: localtime(stamp, settings.report_timezone)
 
     conversations: dict[str, list[TurnView]] = {}
+    tickets = None
+    if jobs is not None:
+        from scrum_agent.ticketing.approvals import TicketApprovalService
+
+        tickets = TicketApprovalService(
+            jobs.storage(), chat.jira_client, project_key=settings.jira_project_key
+        )
+
+    def approver(request: Request) -> str:
+        user = request.session.get("approval_user")
+        if user != settings.approval_user_id:
+            raise PermissionError("Approval session is not authenticated")
+        return user
 
     def template_globals() -> dict:
         return {
@@ -133,6 +153,7 @@ def create_app(settings: Settings, chat: ChatService, jobs=None) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
+        request.session["approval_user"] = settings.approval_user_id
         session_id = request.cookies.get(_SESSION_COOKIE)
         if session_id not in conversations:
             session_id = secrets.token_urlsafe(32)
@@ -195,6 +216,52 @@ def create_app(settings: Settings, chat: ChatService, jobs=None) -> FastAPI:
     @app.get("/healthz")
     async def healthz() -> JSONResponse:
         return JSONResponse({"status": "ok"})
+
+    # -- approved ticket creation (Week 8) --------------------------------------
+
+    @app.post("/tickets/drafts")
+    async def create_ticket_draft(request: Request) -> Response:
+        if tickets is None:
+            return PlainTextResponse("Ticket creation needs the local database.", status_code=409)
+        try:
+            body = await request.json()
+            issue_type = body.get("issue_type") if isinstance(body, dict) else None
+            fields = body.get("fields") if isinstance(body, dict) else None
+            valid_fields = isinstance(fields, dict) and all(
+                isinstance(key, str) and isinstance(value, str) for key, value in fields.items()
+            )
+            if not isinstance(issue_type, str) or not issue_type.strip() or not valid_fields:
+                raise ValueError("issue_type and fields must be text values")
+            if len(fields) > 32 or any(len(value) > 10_000 for value in fields.values()):
+                raise ValueError("Too many or too-large draft fields")
+            return JSONResponse(tickets.create_draft(issue_type, fields, creator=approver(request)))
+        except PermissionError:
+            return PlainTextResponse("Approval session is not authenticated.", status_code=403)
+        except ValueError as exc:
+            return PlainTextResponse(str(exc), status_code=400)
+
+    @app.post("/tickets/drafts/{draft_id}/approve")
+    async def approve_ticket_draft(request: Request, draft_id: int) -> Response:
+        if tickets is None:
+            return PlainTextResponse("Ticket creation needs the local database.", status_code=409)
+        try:
+            return JSONResponse(tickets.approve(draft_id, approver=approver(request)))
+        except PermissionError:
+            return PlainTextResponse("Approval session is not authenticated.", status_code=403)
+        except ValueError as exc:
+            return PlainTextResponse(str(exc), status_code=400)
+
+    @app.post("/tickets/approvals/{approval_id}/execute")
+    async def execute_ticket_approval(request: Request, approval_id: int) -> Response:
+        if tickets is None:
+            return PlainTextResponse("Ticket creation needs the local database.", status_code=409)
+        try:
+            result = tickets.execute(approval_id, approver=approver(request))
+            return JSONResponse(result, status_code=200 if result["status"] == "succeeded" else 202)
+        except PermissionError:
+            return PlainTextResponse("Approval session is not authenticated.", status_code=403)
+        except ValueError as exc:
+            return PlainTextResponse(str(exc), status_code=400)
 
     # -- reports (Weeks 5-6) ---------------------------------------------------
 

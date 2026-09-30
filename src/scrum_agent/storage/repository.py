@@ -263,6 +263,113 @@ class PgStorage:
             )
             return cur.fetchall()
 
+    def create_draft(
+        self,
+        *,
+        creator: str,
+        issue_type: str,
+        template_version: str,
+        payload: dict,
+        payload_hash: str,
+        correlation_marker: str,
+        created_at: datetime,
+    ) -> int:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO scrum_agent.ticket_drafts
+                    (creator, issue_type, template_version, payload, payload_hash,
+                     correlation_marker, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
+                """,
+                (
+                    creator,
+                    issue_type,
+                    template_version,
+                    json.dumps(payload),
+                    payload_hash,
+                    correlation_marker,
+                    created_at,
+                ),
+            )
+            return int(cur.fetchone()["id"])
+
+    def get_draft(self, draft_id: int) -> dict | None:
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT * FROM scrum_agent.ticket_drafts WHERE id = %s", (draft_id,))
+            return cur.fetchone()
+
+    def create_approval(
+        self,
+        *,
+        draft_id: int,
+        approver: str,
+        payload_hash: str,
+        approved_at: datetime,
+        expires_at: datetime,
+    ) -> int:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO scrum_agent.ticket_approvals
+                    (draft_id, approver, payload_hash, approved_at, expires_at)
+                VALUES (%s, %s, %s, %s, %s) RETURNING id
+                """,
+                (draft_id, approver, payload_hash, approved_at, expires_at),
+            )
+            return int(cur.fetchone()["id"])
+
+    def get_approval(self, approval_id: int) -> dict | None:
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT * FROM scrum_agent.ticket_approvals WHERE id = %s", (approval_id,))
+            return cur.fetchone()
+
+    def create_execution(
+        self,
+        *,
+        approval_id: int,
+        payload_hash: str,
+        correlation_marker: str,
+        status: str,
+        started_at: datetime,
+    ) -> int:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO scrum_agent.ticket_executions
+                    (approval_id, payload_hash, correlation_marker, status, started_at)
+                VALUES (%s, %s, %s, %s, %s) RETURNING id
+                """,
+                (approval_id, payload_hash, correlation_marker, status, started_at),
+            )
+            return int(cur.fetchone()["id"])
+
+    def get_execution_by_approval(self, approval_id: int) -> dict | None:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM scrum_agent.ticket_executions WHERE approval_id = %s", (approval_id,)
+            )
+            return cur.fetchone()
+
+    def update_execution(
+        self,
+        execution_id: int,
+        *,
+        status: str,
+        issue_key: str | None = None,
+        reconciled: bool = False,
+        finished_at: datetime,
+    ) -> None:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE scrum_agent.ticket_executions
+                SET status = %s, issue_key = %s, reconciled = %s, finished_at = %s
+                WHERE id = %s
+                """,
+                (status, issue_key, reconciled, finished_at, execution_id),
+            )
+
     # -- report jobs (Week 5) --------------------------------------------------
 
     def submit_report_job(

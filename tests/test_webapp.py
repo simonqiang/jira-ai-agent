@@ -6,12 +6,16 @@ fixture Jira and a scripted model; no sockets are opened.
 
 from __future__ import annotations
 
+import json
+
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from scrum_agent.web import create_app
 from tests.agent_fakes import ScriptedStep, make_chat, tool_call
+from tests.checked_queries import FakeJira
 from tests.conftest import make_settings
 
 BASE = "http://127.0.0.1"
@@ -181,8 +185,6 @@ def test_model_base_url_must_be_clean_https(url: str) -> None:
 
 
 def make_report_app():
-    import httpx
-
     from scrum_agent.jira.client import JiraClient
     from scrum_agent.reports.jobs import ReportJobs
     from tests.checked_queries import FakeJira
@@ -261,8 +263,6 @@ def test_reports_without_jobs_redirect_with_error() -> None:
 def test_report_view_escapes_untrusted_issue_text() -> None:
     import dataclasses
 
-    import httpx
-
     from scrum_agent.jira.client import JiraClient
     from scrum_agent.reports.jobs import ReportJobs
     from tests.checked_queries import DEFAULT_ISSUES, FakeJira
@@ -282,3 +282,133 @@ def test_report_view_escapes_untrusted_issue_text() -> None:
     page = web.get("/reports/1")
     assert "<script>" not in page.text
     assert "&lt;script&gt;" in page.text
+
+
+# -- approved ticket creation (Week 8) ---------------------------------------------
+
+
+class TicketJira(FakeJira):
+    """Fixture Jira plus the create-metadata and create-issue routes."""
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path == "/rest/api/3/issue":
+            self.created_fields.append(json.loads(request.content)["fields"])
+            return httpx.Response(200, json={"id": "10090", "key": "PAY-90"})
+        if request.method == "GET" and path == "/rest/api/3/issue/PAY-90":
+            created = dict(self.issues[0].payload())  # verify step reads it back
+            created["id"], created["key"] = "10090", "PAY-90"
+            return httpx.Response(200, json=created)
+        if path == "/rest/api/3/issue/createmeta/PAY/issuetypes":
+            return httpx.Response(200, json={"values": [{"id": "10001", "name": "Bug"}]})
+        if path == "/rest/api/3/issue/createmeta/PAY/issuetypes/10001":
+            return httpx.Response(
+                200,
+                json={
+                    "fields": [
+                        {"fieldId": field_id}
+                        for field_id in ("project", "issuetype", "summary", "description", "labels")
+                    ]
+                },
+            )
+        return super().handler(request)
+
+
+class FakeTicketJobs:
+    def __init__(self, storage) -> None:
+        self._storage = storage
+
+    def storage(self):
+        return self._storage
+
+
+def make_ticket_app():
+    from tests.test_ticketing import MemoryStorage
+
+    jira = TicketJira()
+    jira.created_fields = []
+    chat, _, _ = make_chat(jira=jira)
+    storage = MemoryStorage()
+    app = create_app(make_settings(), chat, FakeTicketJobs(storage))
+    return app, storage, jira
+
+
+def test_approved_ticket_flow_creates_exactly_once() -> None:
+    from tests.test_ticketing import complete_bug
+
+    app, storage, jira = make_ticket_app()
+    client = client_for(app)
+    client.get("/")  # establish the approval session
+
+    draft = client.post("/tickets/drafts", json={"issue_type": "Bug", "fields": complete_bug()})
+    assert draft.status_code == 200
+    body = draft.json()
+    assert body["payload"]["project"] == {"key": "PAY"}
+    assert body["payload"]["summary"] == "Export fails"
+    assert body["payload"]["labels"][0].startswith("scrum-agent-req-")
+    assert body["payload_hash"]
+
+    approval = client.post(f"/tickets/drafts/{body['id']}/approve")
+    assert approval.status_code == 200
+    assert "expires_at" in approval.json()
+
+    executed = client.post(f"/tickets/approvals/{approval.json()['id']}/execute")
+    assert executed.status_code == 200
+    assert executed.json()["issue_key"] == "PAY-90"
+    assert jira.created_fields == [body["payload"]]  # exact approved bytes
+
+    again = client.post(f"/tickets/approvals/{approval.json()['id']}/execute")
+    assert again.json() == executed.json()
+    assert len(jira.created_fields) == 1  # duplicate click created nothing
+    assert storage.executions[executed.json()["execution_id"]]["status"] == "succeeded"
+
+
+def test_ticket_endpoints_require_the_approval_session() -> None:
+    from tests.test_ticketing import complete_bug
+
+    app, *_ = make_ticket_app()
+    client = client_for(app)  # no visit to "/": no approval session
+    assert (
+        client.post(
+            "/tickets/drafts", json={"issue_type": "Bug", "fields": complete_bug()}
+        ).status_code
+        == 403
+    )
+    assert client.post("/tickets/drafts/1/approve").status_code == 403
+    assert client.post("/tickets/approvals/1/execute").status_code == 403
+
+
+def test_ticket_endpoints_without_database_return_409() -> None:
+    app, *_ = make_app()
+    client = client_for(app)
+    client.get("/")
+    assert (
+        client.post("/tickets/drafts", json={"issue_type": "Bug", "fields": {}}).status_code == 409
+    )
+    assert client.post("/tickets/drafts/1/approve").status_code == 409
+    assert client.post("/tickets/approvals/1/execute").status_code == 409
+
+
+def test_create_ticket_draft_rejects_bad_bodies() -> None:
+    app, *_ = make_ticket_app()
+    client = client_for(app)
+    client.get("/")
+    base = "/tickets/drafts"
+    assert (
+        client.post(base, content=b"{", headers={"content-type": "application/json"}).status_code
+        == 400
+    )
+    assert client.post(base, json="not-a-dict").status_code == 400
+    assert (
+        client.post(base, json={"issue_type": "Bug", "fields": {"summary": 5}}).status_code == 400
+    )
+    assert (
+        client.post(base, json={"issue_type": "Task", "fields": {"summary": "x"}}).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            base, json={"issue_type": "Bug", "fields": {"summary": "x" * 10_001}}
+        ).status_code
+        == 400
+    )

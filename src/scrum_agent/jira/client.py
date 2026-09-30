@@ -185,6 +185,69 @@ class JiraClient:
         self._check_issue_scope(issue.key)  # Jira may resolve a moved issue's old key.
         return issue
 
+    def validate_create_fields(self, issue_type: str, fields: dict) -> None:
+        """Recheck create permission and the live schema before one approved write."""
+        if fields.get("project") != {"key": self._settings.jira_project_key}:
+            raise JiraApiError("Ticket payload targets an unexpected project")
+        types = self._request(
+            "GET",
+            f"/rest/api/3/issue/createmeta/{self._settings.jira_project_key}/issuetypes",
+        )
+        values = types.get("values") if isinstance(types, dict) else None
+        match = next(
+            (
+                item
+                for item in values or ()
+                if isinstance(item, dict) and item.get("name") == issue_type and item.get("id")
+            ),
+            None,
+        )
+        if match is None:
+            raise JiraApiError(f"Jira does not currently allow creating issue type {issue_type!r}")
+        metadata = self._request(
+            "GET",
+            (
+                f"/rest/api/3/issue/createmeta/{self._settings.jira_project_key}"
+                f"/issuetypes/{match['id']}"
+            ),
+        )
+        available = metadata.get("fields") if isinstance(metadata, dict) else None
+        if not isinstance(available, list):
+            raise JiraApiError("Jira returned invalid create-field metadata")
+        allowed = {
+            item.get("fieldId")
+            for item in available
+            if isinstance(item, dict) and isinstance(item.get("fieldId"), str)
+        }
+        required = {"project", "issuetype", "summary", "description", "labels"}
+        missing = required - allowed
+        if missing:
+            names = ", ".join(sorted(missing))
+            raise JiraApiError(f"Jira create metadata does not permit required fields: {names}")
+
+    def create_issue(self, fields: dict) -> dict:
+        """Create exactly one prevalidated issue; callers must not retry this call."""
+        payload = self._request("POST", "/rest/api/3/issue", json={"fields": fields})
+        if not isinstance(payload, dict):
+            raise JiraApiError("Jira returned invalid create response")
+        key = payload.get("key")
+        issue_id = payload.get("id")
+        if not isinstance(key, str) or not key or not isinstance(issue_id, str) or not issue_id:
+            raise JiraApiError("Jira create response omitted the issue identity")
+        self._check_issue_scope(key)
+        return {"id": issue_id, "key": key}
+
+    def find_by_marker(self, marker: str) -> dict | None:
+        """Find the one issue created by an uncertain request correlation label."""
+        if not re.fullmatch(r"scrum-agent-req-[0-9a-f-]{36}", marker):
+            raise JiraApiError("Invalid ticket correlation marker")
+        matches = list(self.iter_search_jql(f'labels = "{marker}"', max_pages=2))
+        if len(matches) > 1:
+            raise JiraApiError("Ticket correlation marker matched multiple issues")
+        if not matches:
+            return None
+        return {"id": matches[0].id, "key": matches[0].key}
+
     def get_board(self, board_id: int) -> Board:
         self._check_board_scope(board_id)
         return self._parse_response(

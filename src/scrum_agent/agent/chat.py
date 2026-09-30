@@ -112,6 +112,11 @@ class ChatService:
         """The scoped search service every tool call flows through."""
         return self._service
 
+    @property
+    def jira_client(self) -> JiraClient:
+        """The server-owned Jira client, never exposed to the model for writes."""
+        return self._client
+
     async def run_turn(self, session_id: str, user_text: str) -> TurnResult:
         """Run one user turn and return the answer with server-truth sources."""
         text = user_text.strip()
