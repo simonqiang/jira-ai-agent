@@ -253,10 +253,27 @@ def build_narrative(report: dict) -> str:
         + (f" — {'; '.join(report['completeness_notes'])}" if report["completeness_notes"] else "")
         + "."
     )
-    lines.append(
-        "Commitment/scope-change history: unavailable in this report "
-        "(changelog analysis arrives with Week 6); never inferred from current state."
-    )
+    history = report.get("history")
+    if history is None:
+        lines.append(
+            "Commitment/scope-change history: unavailable; never inferred from current state."
+        )
+    elif history["status"] == "unavailable":
+        lines.append(
+            "Commitment/scope-change history: unavailable — "
+            + "; ".join(history["missing_evidence"])
+            + "."
+        )
+    else:
+        completion = history["completion"]
+        lines.append(
+            "Historical commitment: "
+            f"{completion['completed_during_sprint']}/{history['committed']['count']} "
+            "completed during sprint; "
+            f"added {len(history['scope_changes']['added'])}, "
+            f"removed {len(history['scope_changes']['removed'])}, "
+            f"rollover {', '.join(completion['rollover']) or 'none'}."
+        )
     return "\n".join(lines)
 
 

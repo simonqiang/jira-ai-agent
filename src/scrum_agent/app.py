@@ -96,7 +96,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
     report_parser = subparsers.add_parser(
         "report",
-        help="generate a current-sprint report through the durable job engine (Week 5)",
+        help="generate a sprint report through the durable job engine (Weeks 5-6)",
     )
     report_parser.add_argument("--sprint", required=True, help="sprint name or numeric ID")
     report_parser.add_argument(

@@ -246,6 +246,23 @@ class PgStorage:
             )
             return cur.fetchall()
 
+    def events_for_issue_ids(self, issue_ids: list[str]) -> list[dict]:
+        """Ordered changelog evidence for a report's persisted issue inputs."""
+        if not issue_ids:
+            return []
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT issue_id, changelog_id, item_index, field, field_id,
+                       from_id, from_value, to_id, to_value, occurred_at
+                FROM scrum_agent.issue_events
+                WHERE issue_id = ANY(%s)
+                ORDER BY issue_id, occurred_at, changelog_id, item_index
+                """,
+                (issue_ids,),
+            )
+            return cur.fetchall()
+
     # -- report jobs (Week 5) --------------------------------------------------
 
     def submit_report_job(

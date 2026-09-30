@@ -201,6 +201,17 @@ class InMemoryStorage:
             if s["deleted_at"] is None
         ]
 
+    def events_for_issue_ids(self, issue_ids: list[str]) -> list[dict]:
+        return sorted(
+            (event for event in self.events.values() if event["issue_id"] in set(issue_ids)),
+            key=lambda event: (
+                event["issue_id"],
+                event["occurred_at"],
+                event["changelog_id"],
+                event["item_index"],
+            ),
+        )
+
     # -- report jobs (Week 5) --------------------------------------------------
 
     def submit_report_job(

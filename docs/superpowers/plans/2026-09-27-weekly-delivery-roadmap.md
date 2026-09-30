@@ -155,10 +155,10 @@ These are future paths to guide implementation; this planning task does not crea
 
 **Weekly goal:** “I can explain what happened during a closed sprint, with evidence for the calculations.”
 
-- [ ] Implement the Week 1 metric policy using ordered changelog events as the primary source (membership, status and estimate changes live in issue history), with snapshots as cross-checks and for board configuration: initial scope, additions/removals, estimate changes, completion and rollover.
-- [ ] Check done-before-start, reopening, missing estimates, parent/subtask rules, cross-project scope, timezone boundaries and ambiguous closure ordering.
-- [ ] Finalize a report only when relevant ingestion has reconciled and required historical evidence is present; retain immutable metric inputs and policy version. Otherwise return a provisional/partial report with specific missing evidence.
-- [ ] Compare one suitable closed sprint with a manually checked report; document intentional differences from Jira. Add same-board velocity trends only for sufficiently supported sprints.
+- [x] Implement the Week 1 metric policy using ordered changelog events as the primary source (membership, status and estimate changes live in issue history), with snapshots as cross-checks and for board configuration: initial scope, additions/removals, estimate changes, completion and rollover.
+- [x] Check done-before-start, reopening, missing estimates, parent/subtask rules, cross-project scope, timezone boundaries and ambiguous closure ordering. *(Synthetic event fixtures cover reopening, rollover, start-time estimate changes/missing values, UTC boundaries and subtask exclusion; scope continues to be enforced by `PilotScope`.)*
+- [x] Finalize a report only when relevant ingestion has reconciled and required historical evidence is present; retain immutable metric inputs and policy version. Otherwise return a provisional/partial report with specific missing evidence. *(The persisted report JSON retains policy/evidence inputs. Missing boundary history or ambiguous ordered events yields partial/unavailable history with issue-specific evidence notes.)*
+- [ ] Compare one suitable closed sprint with a manually checked report; document intentional differences from Jira. Add same-board velocity trends only for sufficiently supported sprints. *(Blocked on a suitable fully observed real closed sprint; the checked synthetic fixture is covered by automated tests.)*
 
 **Friday demo:** Show one completed-during-sprint issue, one scope change and one unfinished/rolled-over issue with the supporting event history.
 

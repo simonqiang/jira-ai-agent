@@ -6,7 +6,7 @@ sprint reports and preparing clear Jira tickets. Design and weekly roadmap:
 - [Product requirements and architecture](docs/superpowers/specs/2026-09-27-scrum-master-agent-design.md)
 - [Weekly implementation roadmap](docs/superpowers/plans/2026-09-27-weekly-delivery-roadmap.md)
 
-Status: **Week 4 — continuous sprint-history collection in implementation**. Week 1's
+Status: **Week 6 — trustworthy historical sprint reports in implementation**. Week 1's
 live issue and board reads work for board 23031; Week 2 adds sprint selection, typed
 filters, centralized pilot-scope checks and a checked query set; Week 3 ships the
 local read-only ADK chat. Week 4 stores issue snapshots, changelog events, board
@@ -226,7 +226,7 @@ With `SCRUM_AGENT_DATABASE_URL` set, ADK chat sessions persist in PostgreSQL
 (keyed by app/user/session — single pilot user) and survive an app restart; the
 rendered web transcript remains in-process.
 
-### Sprint reports (Week 5)
+### Sprint reports (Weeks 5-6)
 
 Reports are computed in Python from the **persisted collection inputs** (Week 4
 snapshots plus the versioned board configuration), never from search samples or
@@ -254,6 +254,16 @@ chat, `build_sprint_report` returns a job handle (never blocks) and
 `get_report` polls it. Exports sanitize CSV cells beginning with `=`, `+`, `-`
 or `@` against spreadsheet formula injection and escape pipes and markup in
 rendered views.
+
+For a **closed** sprint, the report reconstructs commitment and scope changes
+from persisted, ordered Jira changelog events: membership at sprint start,
+additions/removals, start-time estimates and their changes, completion during
+the sprint, reopened work and evidence-backed rollover. Board done-status IDs
+remain versioned configuration evidence. If a required boundary event is
+missing or Jira's same-timestamp event order is ambiguous, historical metrics
+are explicitly `partial`/`unavailable` with the missing evidence named; they
+are never inferred from the current snapshot. Subtasks are excluded from point
+totals by default.
 
 ## Layout
 

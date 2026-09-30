@@ -112,6 +112,21 @@ def _totals(report: dict) -> list[tuple[str, object]]:
     ]
     for status, count in report["status_counts"].items():
         rows.append((f"Status: {status}", count))
+    history = report.get("history")
+    if history is not None:
+        rows.append(("Historical evidence", history["status"]))
+        rows.append(("Committed at sprint start", history.get("committed", {}).get("count", "N/A")))
+        if history["status"] != "unavailable":
+            completion = history["completion"]
+            rows.extend(
+                (
+                    ("Completed during sprint", completion["completed_during_sprint"]),
+                    ("Done by sprint end", completion["done_by_end"]),
+                    ("Scope additions", len(history["scope_changes"]["added"])),
+                    ("Scope removals", len(history["scope_changes"]["removed"])),
+                    ("Rollover", len(completion["rollover"])),
+                )
+            )
     return rows
 
 

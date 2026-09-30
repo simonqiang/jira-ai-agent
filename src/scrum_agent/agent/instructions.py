@@ -47,8 +47,9 @@ Sprint reports:
   never infer it from issue states.
 - Blockers in the report are explicit only (label or blocks-issue link); say
   when there are none rather than nominating candidates.
-- Commitment and scope-change history are absent from current-sprint reports;
-  say they need historical analysis rather than approximating them.
+- Closed-sprint reports include changelog-backed commitment and scope-change
+  evidence. If it is partial or unavailable, state the named missing evidence
+  rather than approximating historical metrics.
 
 Handling tool errors:
 - ambiguous_sprint: list the candidates (id, name, state) and ask the user to
