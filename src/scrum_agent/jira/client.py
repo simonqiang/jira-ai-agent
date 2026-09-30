@@ -24,11 +24,44 @@ from scrum_agent.jira.errors import (
     JiraPermissionError,
     JiraRateLimitedError,
 )
-from scrum_agent.jira.models import Board, BoardConfiguration, Issue, Sprint
+from scrum_agent.jira.models import (
+    Board,
+    BoardConfiguration,
+    ChangelogEntry,
+    Issue,
+    Sprint,
+)
 
 _T = TypeVar("_T")
 
-_SEARCH_FIELDS = ["summary", "status", "issuetype", "assignee", "updated"]
+_ISSUE_FIELDS = [
+    "summary",
+    "status",
+    "issuetype",
+    "assignee",
+    "reporter",
+    "labels",
+    "duedate",
+    "priority",
+    "description",
+    "customfield_10350",  # Acceptance Criteria
+    "subtasks",
+    "issuelinks",
+    "customfield_10199",  # Severity
+    "customfield_10263",  # Risk Rating
+    "customfield_10249",  # Issue Rating
+    "updated",
+]
+
+# Curated field list for the collector's authoritative per-issue read; the
+# board-specific estimate field is appended per run via extra_fields.
+_ISSUE_DETAIL_FIELDS = [
+    *_ISSUE_FIELDS,
+    "created",
+    "resolution",
+    "labels",
+    "sprint",
+]
 
 _SPRINT_STATES = ("future", "active", "closed")
 
@@ -140,7 +173,10 @@ class JiraClient:
     def get_issue(self, issue_key: str) -> Issue:
         self._check_issue_scope(issue_key)
         issue = self._parse_response(
-            Issue.from_api, self._request("GET", f"/rest/api/3/issue/{issue_key}")
+            Issue.from_api,
+            self._request(
+                "GET", f"/rest/api/3/issue/{issue_key}", params={"fields": ",".join(_ISSUE_FIELDS)}
+            ),
         )
         self._check_issue_scope(issue.key)  # Jira may resolve a moved issue's old key.
         return issue
@@ -150,6 +186,65 @@ class JiraClient:
         return self._parse_response(
             Board.from_api, self._request("GET", f"/rest/agile/1.0/board/{board_id}")
         )
+
+    def get_issue_detail(
+        self, issue_key: str, *, extra_fields: Sequence[str] = ()
+    ) -> dict[str, Any]:
+        """Authoritative issue read for collection: curated fields, raw payload.
+
+        Returns the raw response so the collector can persist the ``fields``
+        object verbatim (the board-specific estimate field id arrives via
+        ``extra_fields``). The returned key is re-checked so a moved issue
+        cannot smuggle an out-of-scope payload in.
+        """
+        self._check_issue_scope(issue_key)
+        fields = [*_ISSUE_DETAIL_FIELDS, *extra_fields]
+        payload = self._request(
+            "GET",
+            f"/rest/api/3/issue/{issue_key}",
+            params={"fields": ",".join(fields)},
+        )
+        key = payload.get("key") if isinstance(payload, dict) else None
+        if not isinstance(key, str) or not key:
+            raise JiraApiError("Jira returned an issue without a key")
+        self._check_issue_scope(key)
+        return payload
+
+    def iter_issue_changelog(
+        self,
+        issue_key: str,
+        *,
+        max_results_per_page: int = 100,
+        max_pages: int = 20,
+        on_page: Callable[[], None] | None = None,
+    ) -> Iterator[ChangelogEntry]:
+        """Iterate an issue's changelog, following startAt/isLast pagination.
+
+        Mirrors the sprint-listing contract: malformed pages fail closed and a
+        page cap fails loudly instead of truncating history silently.
+        """
+        self._check_issue_scope(issue_key)
+        start_at = 0
+        for _ in range(max_pages):
+            payload = self._request(
+                "GET",
+                f"/rest/api/3/issue/{issue_key}/changelog",
+                params={"startAt": start_at, "maxResults": max_results_per_page},
+            )
+            values = payload.get("values")
+            is_last = payload.get("isLast")
+            if not isinstance(values, list) or not isinstance(is_last, bool):
+                raise JiraApiError("Jira returned an invalid changelog page")
+            if on_page is not None:
+                on_page()
+            for item in values:
+                yield self._parse_response(ChangelogEntry.from_api, item)
+            if is_last:
+                return
+            if not values:
+                raise JiraApiError("Jira returned an incomplete changelog page without values")
+            start_at += len(values)
+        raise JiraApiError(f"Changelog listing exceeded {max_pages} pages; raise the limit")
 
     def get_board_configuration(self, board_id: int) -> BoardConfiguration:
         self._check_board_scope(board_id)
@@ -260,6 +355,7 @@ class JiraClient:
         *,
         max_results_per_page: int = 50,
         max_pages: int = 20,
+        on_page: Callable[[], None] | None = None,
     ) -> Iterator[Issue]:
         """Iterate issues matching JQL, following nextPageToken across all pages.
 
@@ -270,7 +366,7 @@ class JiraClient:
             body: dict[str, Any] = {
                 "jql": self._scoped_jql(jql),
                 "maxResults": max_results_per_page,
-                "fields": _SEARCH_FIELDS,
+                "fields": _ISSUE_FIELDS,
             }
             if token is not None:
                 body["nextPageToken"] = token
@@ -283,6 +379,8 @@ class JiraClient:
                 raise JiraApiError("Jira returned an invalid search page")
             if payload.get("isLast") is False and not next_token:
                 raise JiraApiError("Jira returned an incomplete search page without a next token")
+            if on_page is not None:
+                on_page()
             for item in items:
                 issue = self._parse_response(Issue.from_api, item)
                 self._check_issue_scope(issue.key)

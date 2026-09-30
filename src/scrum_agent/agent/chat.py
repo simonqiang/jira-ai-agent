@@ -1,10 +1,11 @@
-"""Short-lived conversational agent service (Week 3).
+"""Conversational agent service with opt-in persisted sessions.
 
-``ChatService`` owns the Jira client, the ADK agent, an in-memory session
-service and the usage recorder. Conversations are deliberately short-lived:
-sessions and turn counts live in process memory only, so restarting the app
-or pressing reset clears all context (persisted, access-tracked context is a
-Week 4 deliverable). Sources reported per turn come from the tool payloads
+``ChatService`` owns the Jira client, the ADK agent, a session service and the
+usage recorder. When ``SCRUM_AGENT_DATABASE_URL`` is configured, ADK sessions
+persist in the local Postgres database (keyed by app/user/session, so the
+single pilot user's conversations survive an app restart); otherwise they stay
+in process memory as in Week 3. The rendered web transcript remains
+in-process regardless. Sources reported per turn come from the tool payloads
 the server actually executed, never from citations the model claims.
 """
 
@@ -16,7 +17,7 @@ from datetime import UTC, datetime
 from google.adk.agents import LlmAgent
 from google.adk.models.base_llm import BaseLlm
 from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
+from google.adk.sessions import BaseSessionService, DatabaseSessionService, InMemorySessionService
 from google.genai import types
 from httpx import BaseTransport
 
@@ -57,6 +58,22 @@ def build_agent(service: SearchService, llm: BaseLlm, usage: UsageRecorder) -> L
     )
 
 
+def asyncpg_url(database_url: str) -> str:
+    """Rewrite a plain postgresql:// DSN for ADK's asyncpg-only session engine."""
+    return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+
+def build_session_service(settings: Settings) -> BaseSessionService:
+    """Persist ADK sessions in Postgres when configured, else keep them in memory.
+
+    ADK's DatabaseSessionService creates its own tables lazily on first use,
+    so construction needs no live database.
+    """
+    if settings.database_url is None:
+        return InMemorySessionService()
+    return DatabaseSessionService(db_url=asyncpg_url(settings.database_url))
+
+
 class ChatService:
     """Runs conversational turns against the ADK agent over the pilot board."""
 
@@ -77,7 +94,7 @@ class ChatService:
         self._service = SearchService(self._client)
         self.usage = UsageRecorder()
         self._agent = build_agent(self._service, llm, self.usage)
-        self._sessions = InMemorySessionService()
+        self._sessions = build_session_service(settings)
         self._runner = Runner(
             app_name=self.APP_NAME, agent=self._agent, session_service=self._sessions
         )
@@ -147,5 +164,8 @@ class ChatService:
         self._turn_counts.pop(session_id, None)
 
     async def aclose(self) -> None:
-        """Release the Jira client (FastAPI shutdown hook)."""
+        """Release the Jira client and any database session engine."""
         self._client.close()
+        close = getattr(self._sessions, "close", None)
+        if close is not None:
+            await close()

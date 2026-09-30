@@ -1,7 +1,8 @@
-"""CLI for the personal pilot: probe, sprints, search, serve and baseline.
+"""CLI for the personal pilot: probe, sprints, search, serve, baseline, and the
+Week 4 storage commands (migrate, collect, freshness).
 
 Prints sanitized summaries only (no credentials, no assignee names). Exit codes:
-0 success, 1 Jira/search error, 2 configuration or input error.
+0 success, 1 Jira/search/database or alarm exit, 2 configuration or input error.
 """
 
 from __future__ import annotations
@@ -71,6 +72,25 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--out",
         default=None,
         help="output path for the JSON artifact (default: docs notes directory)",
+    )
+
+    subparsers.add_parser(
+        "migrate", help="apply pending SQL migrations to the local database (Week 4)"
+    )
+
+    collect_parser = subparsers.add_parser(
+        "collect",
+        help="run one idempotent collection cycle and report freshness (Week 4)",
+    )
+    collect_parser.add_argument(
+        "--full",
+        action="store_true",
+        help="reconcile every issue in the project scope, not just recent updates",
+    )
+
+    subparsers.add_parser(
+        "freshness",
+        help="show collection freshness and credential-expiry alarms (Week 4)",
     )
 
     args = parser.parse_args(argv)
@@ -144,13 +164,38 @@ def _sprints(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
-def _print_issue(settings: Settings, issue) -> None:
+def _print_issue(settings: Settings, issue, *, include_details: bool = False) -> None:
     print(f"\n{issue.key}: {issue.summary}")
     print(f"  link=https://{settings.jira_site}/browse/{issue.key}")
     print(f"  status={issue.status} type={issue.issue_type}", end="")
     if issue.updated:
         print(f" updated={issue.updated}", end="")
     print()
+    if not include_details:
+        return
+    for label, value in (
+        ("Description", issue.description),
+        ("Acceptance Criteria", issue.acceptance_criteria),
+        ("Assignee", issue.assignee),
+        ("Reporter", issue.reporter),
+        ("Labels", ", ".join(issue.labels) if issue.labels else None),
+        ("Due date", issue.due_date),
+        ("Severity", issue.severity),
+        ("Risk Rating", issue.risk_rating),
+        ("Issue Rating", issue.issue_rating),
+        ("Priority", issue.priority),
+    ):
+        if value:
+            print(f"  {label}: {value}")
+    if issue.subtasks:
+        print("  Subtasks:")
+        for subtask in issue.subtasks:
+            priority = f", priority={subtask.priority}" if subtask.priority else ""
+            print(f"    {subtask.key}: {subtask.summary} [{subtask.status}{priority}]")
+    if issue.linked_work_items:
+        print("  Linked Work Items:")
+        for item in issue.linked_work_items:
+            print(f"    {item.relationship}: {item.key} {item.summary} [{item.status}]")
 
 
 def _search(settings: Settings, args: argparse.Namespace) -> int:
@@ -164,7 +209,7 @@ def _search(settings: Settings, args: argparse.Namespace) -> int:
         service = SearchService(client)
 
         if args.issue:
-            _print_issue(settings, service.get_issue(args.issue))
+            _print_issue(settings, service.get_issue(args.issue), include_details=True)
             print("\n1 issue.")
             return 0
 
@@ -254,6 +299,113 @@ def _baseline(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _require_database(settings: Settings) -> bool:
+    from scrum_agent.config import require_database_settings
+
+    try:
+        require_database_settings(settings)
+    except ValueError as error:
+        print(f"Configuration error - {error}", file=sys.stderr)
+        return False
+    return True
+
+
+def _migrate(settings: Settings) -> int:
+    """Apply pending storage migrations; idempotent."""
+    import psycopg
+
+    from scrum_agent.storage.db import connect, run_migrations
+
+    if not _require_database(settings):
+        return 2
+    try:
+        with connect(settings) as conn:
+            applied = run_migrations(conn)
+    except psycopg.Error as error:
+        print(f"Database error: {error}", file=sys.stderr)
+        return 1
+    if applied:
+        print(f"Applied {len(applied)} migration(s): {', '.join(applied)}")
+    else:
+        print("Database schema is up to date.")
+    return 0
+
+
+def _print_freshness(report) -> None:
+    from scrum_agent.sync.freshness import format_age
+
+    if report.last_success_at is None:
+        print("Collection has never succeeded; no sprint history is stored yet.")
+    else:
+        stamp = report.last_success_at.isoformat(timespec="seconds")
+        age = format_age(report.success_age) if report.success_age is not None else "?"
+        print(f"Last successful collection: {stamp} ({age} ago)")
+    credential = f"Credential: {report.credential_status}"
+    if report.days_until_expiry is not None and report.credential_status != "expired":
+        credential += f" (expires in {report.days_until_expiry} day(s))"
+    print(credential)
+    print(
+        f"Stored: {report.live_issues} live issue(s), "
+        f"{report.tombstoned_issues} tombstoned, {report.events_total} event(s)"
+    )
+    for warning in report.warnings:
+        print(f"WARNING: {warning}")
+    for alarm in report.alarms:
+        print(f"ALARM: {alarm}")
+
+
+def _freshness(settings: Settings) -> int:
+    """Report collection freshness and credential state; exit 1 on alarms."""
+    import psycopg
+
+    from scrum_agent.storage.db import connect
+    from scrum_agent.storage.repository import PgStorage
+    from scrum_agent.sync.freshness import freshness_report
+
+    if not _require_database(settings):
+        return 2
+    try:
+        with connect(settings) as conn:
+            report = freshness_report(PgStorage(conn), settings)
+    except psycopg.Error as error:
+        print(f"Database error: {error}", file=sys.stderr)
+        return 1
+    _print_freshness(report)
+    return 0 if report.is_healthy else 1
+
+
+def _collect(settings: Settings, args: argparse.Namespace) -> int:
+    """Run one idempotent collection cycle, then report freshness."""
+    import psycopg
+
+    from scrum_agent.storage.db import connect
+    from scrum_agent.storage.repository import PgStorage
+    from scrum_agent.sync.collector import CollectorService
+    from scrum_agent.sync.freshness import freshness_report
+
+    if not _require_database(settings):
+        return 2
+    trigger = "manual"
+    try:
+        with connect(settings) as conn:
+            storage = PgStorage(conn)
+            with JiraClient(settings) as client:
+                summary = CollectorService(client, storage).run(trigger=trigger, full=args.full)
+            report = freshness_report(storage, settings)
+    except psycopg.Error as error:
+        print(f"Database error: {error}", file=sys.stderr)
+        return 1
+    scope = "full project scope" if args.full else "recent updates"
+    print(
+        f"Collected {summary['issues_seen']} issue(s) "
+        f"({summary['events_seen']} new event(s)) across {summary['pages_fetched']} Jira page(s) "
+        f"for {scope} "
+        f"[run {summary['run_id']}, status {summary['status']}]."
+    )
+    _print_freshness(report)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     logging.basicConfig(
@@ -280,6 +432,12 @@ def main(argv: list[str] | None = None) -> int:
             return _serve(settings)
         if args.command == "baseline":
             return _baseline(settings, args)
+        if args.command == "migrate":
+            return _migrate(settings)
+        if args.command == "collect":
+            return _collect(settings, args)
+        if args.command == "freshness":
+            return _freshness(settings)
         return _probe(settings)
     except AmbiguousSprintError as error:
         print(f"Jira error: {error}", file=sys.stderr)

@@ -1,0 +1,26 @@
+# Local pilot database (PC-only; bound to loopback, never exposed to the LAN).
+# The default password protects nothing beyond this machine — the Jira token
+# never enters the database; override SCRUM_AGENT_PG_PASSWORD in the environment
+# if you want a different one.
+#
+# Backup:   docker compose exec -T db pg_dump -U scrum_agent scrum_agent > backup.sql
+# Restore:  docker compose exec -T db psql -U scrum_agent -d scrum_agent < backup.sql
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_DB: scrum_agent
+      POSTGRES_USER: scrum_agent
+      POSTGRES_PASSWORD: ${SCRUM_AGENT_PG_PASSWORD:-scrum_agent}
+    volumes:
+      - scrum_agent_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scrum_agent -d scrum_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  scrum_agent_pgdata:

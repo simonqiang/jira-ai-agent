@@ -26,6 +26,44 @@ ISSUE_PAYLOAD = {
         "status": {"name": "In Progress"},
         "issuetype": {"name": "Bug"},
         "assignee": {"displayName": "A. Developer"},
+        "reporter": {"displayName": "P. Manager"},
+        "labels": ["payments", "customer-impact"],
+        "duedate": "2026-10-15",
+        "priority": {"name": "High"},
+        "description": {
+            "type": "doc",
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "Repro steps"}]}
+            ],
+        },
+        "customfield_10350": {
+            "type": "doc",
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "No duplicate charge"}]}
+            ],
+        },
+        "subtasks": [
+            {
+                "key": "PAY-7",
+                "fields": {
+                    "summary": "Add regression test",
+                    "status": {"name": "To Do"},
+                    "priority": {"name": "Medium"},
+                },
+            }
+        ],
+        "issuelinks": [
+            {
+                "type": {"name": "Blocks", "outward": "blocks"},
+                "outwardIssue": {
+                    "key": "PAY-8",
+                    "fields": {"summary": "Release validation", "status": {"name": "To Do"}},
+                },
+            }
+        ],
+        "customfield_10199": {"value": "Critical"},
+        "customfield_10263": {"value": "High"},
+        "customfield_10249": {"value": "4"},
         "updated": "2026-09-27T08:00:00.000+0000",
     },
 }
@@ -83,6 +121,17 @@ def test_get_issue_parses_nested_fields() -> None:
     assert issue.status == "In Progress"
     assert issue.issue_type == "Bug"
     assert issue.assignee == "A. Developer"
+    assert issue.description == "Repro steps"
+    assert issue.acceptance_criteria == "No duplicate charge"
+    assert issue.reporter == "P. Manager"
+    assert issue.labels == ("payments", "customer-impact")
+    assert issue.due_date == "2026-10-15"
+    assert issue.severity == "Critical"
+    assert issue.risk_rating == "High"
+    assert issue.issue_rating == "4"
+    assert issue.priority == "High"
+    assert issue.subtasks[0].key == "PAY-7"
+    assert issue.linked_work_items[0].relationship == "blocks"
 
 
 def test_authorization_header_sent_basic_site() -> None:
@@ -91,6 +140,20 @@ def test_authorization_header_sent_basic_site() -> None:
     expected = base64.b64encode(b"sm@test.example:tok-test-123").decode()
     assert requests[0].headers["Authorization"] == f"Basic {expected}"
     assert requests[0].url.host == "test.atlassian.net"
+    fields = set(requests[0].url.params["fields"].split(","))
+    assert {
+        "description",
+        "customfield_10350",
+        "subtasks",
+        "issuelinks",
+        "reporter",
+        "labels",
+        "duedate",
+        "customfield_10199",
+        "customfield_10263",
+        "customfield_10249",
+        "priority",
+    } <= fields
 
 
 @pytest.mark.parametrize("auth_mode", ["basic_central", "bearer_central"])
@@ -101,8 +164,8 @@ def test_central_request_preserves_cloud_id_prefix_and_auth(auth_mode: str) -> N
         jira_cloud_id="test-cloud-id",
     )
     client.get_issue("PAY-1")
-    assert str(requests[0].url) == (
-        "https://api.atlassian.com/ex/jira/test-cloud-id/rest/api/3/issue/PAY-1"
+    assert str(requests[0].url).startswith(
+        "https://api.atlassian.com/ex/jira/test-cloud-id/rest/api/3/issue/PAY-1?"
     )
     if auth_mode == "basic_central":
         encoded = base64.b64encode(b"sm@test.example:tok-test-123").decode()
@@ -481,3 +544,155 @@ def test_client_exposes_the_centralized_scope() -> None:
 
     client, _ = make_client(lambda request: ok(ISSUE_PAYLOAD))
     assert client.scope == PilotScope.from_settings(client._settings)
+
+
+CHANGELOG_ENTRY_PAYLOAD = {
+    "id": "10050",
+    "created": "2026-09-20T10:30:00.000+0000",
+    "author": {"displayName": "A. Developer"},
+    "items": [
+        {
+            "field": "status",
+            "fieldtype": "jira",
+            "fieldId": "status",
+            "from": "10001",
+            "fromString": "To Do",
+            "to": "10002",
+            "toString": "In Progress",
+        },
+        {
+            "field": "Story Points",
+            "fieldId": "customfield_10002",
+            "from": None,
+            "fromString": None,
+            "to": "5",
+            "toString": "5",
+        },
+    ],
+}
+
+
+def test_get_issue_detail_returns_raw_payload_with_curated_fields() -> None:
+    client, requests = make_client(lambda request: ok(ISSUE_PAYLOAD))
+    payload = client.get_issue_detail("PAY-1", extra_fields=("customfield_10002",))
+    assert payload["key"] == "PAY-1"
+    fields_param = dict(requests[0].url.params)["fields"]
+    assert "summary" in fields_param.split(",")
+    assert "customfield_10002" in fields_param.split(",")
+
+
+def test_get_issue_detail_denies_out_of_scope_key_without_http() -> None:
+    client, requests = make_client(lambda request: ok(ISSUE_PAYLOAD))
+    with pytest.raises(JiraPermissionError):
+        client.get_issue_detail("OTHER-1")
+    assert requests == []
+
+
+def test_get_issue_detail_rejects_payload_without_key() -> None:
+    client, _ = make_client(lambda request: ok({"id": "10001"}))
+    with pytest.raises(JiraApiError):
+        client.get_issue_detail("PAY-1")
+
+
+def test_get_issue_detail_rechecks_moved_issue_key() -> None:
+    moved = {**ISSUE_PAYLOAD, "key": "OTHER-9"}
+    client, _ = make_client(lambda request: ok(moved))
+    with pytest.raises(JiraPermissionError):
+        client.get_issue_detail("PAY-1")
+
+
+def test_iter_issue_changelog_follows_start_at_pages() -> None:
+    first = {
+        "startAt": 0,
+        "maxResults": 1,
+        "total": 2,
+        "isLast": False,
+        "values": [CHANGELOG_ENTRY_PAYLOAD],
+    }
+    second = {
+        "startAt": 1,
+        "maxResults": 1,
+        "total": 2,
+        "isLast": True,
+        "values": [
+            {
+                **CHANGELOG_ENTRY_PAYLOAD,
+                "id": "10051",
+                "created": "2026-09-21T09:00:00.000+0000",
+                "items": [
+                    {
+                        "field": "Sprint",
+                        "from": None,
+                        "fromString": None,
+                        "to": "3001",
+                        "toString": "Sprint 8",
+                    }
+                ],
+            }
+        ],
+    }
+    pages = {0: first, 1: second}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        start_at = int(request.url.params["startAt"])
+        return ok(pages[start_at])
+
+    client, requests = make_client(handler)
+    entries = list(client.iter_issue_changelog("PAY-1", max_results_per_page=1))
+    assert [entry.id for entry in entries] == ["10050", "10051"]
+    first_entry, second_entry = entries
+    assert first_entry.author == "A. Developer"
+    assert first_entry.items[0].field == "status"
+    assert first_entry.items[0].from_value == "To Do"
+    assert first_entry.items[1].to_id == "5"
+    assert second_entry.items[0].field == "Sprint"
+    assert first_entry.created.isoformat() == "2026-09-20T10:30:00+00:00"
+    start_values = [int(r.url.params["startAt"]) for r in requests]
+    assert start_values == [0, 1]
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        {},
+        {"values": [], "isLast": False, "startAt": 0},  # incomplete page without values
+        {"values": [CHANGELOG_ENTRY_PAYLOAD], "isLast": "yes", "startAt": 0},
+    ],
+)
+def test_iter_issue_changelog_fails_closed_on_malformed_pages(page: dict) -> None:
+    client, _ = make_client(lambda request: ok(page))
+    with pytest.raises(JiraApiError):
+        list(client.iter_issue_changelog("PAY-1"))
+
+
+def test_iter_issue_changelog_fails_loudly_at_page_cap() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return ok(
+            {
+                "startAt": 0,
+                "maxResults": 1,
+                "total": 999,
+                "isLast": False,
+                "values": [CHANGELOG_ENTRY_PAYLOAD],
+            }
+        )
+
+    client, _ = make_client(handler)
+    with pytest.raises(JiraApiError, match="exceeded 2 pages"):
+        list(client.iter_issue_changelog("PAY-1", max_results_per_page=1, max_pages=2))
+
+
+def test_iter_issue_changelog_denies_out_of_scope_key_without_http() -> None:
+    client, requests = make_client(lambda request: ok({}))
+    with pytest.raises(JiraPermissionError):
+        list(client.iter_issue_changelog("OTHER-1"))
+    assert requests == []
+
+
+def test_iter_issue_changelog_surfaces_rate_limit_without_retry() -> None:
+    client, _ = make_client(
+        lambda request: httpx.Response(429, json={}, headers={"Retry-After": "7"})
+    )
+    with pytest.raises(JiraRateLimitedError) as caught:
+        list(client.iter_issue_changelog("PAY-1"))
+    assert caught.value.retry_after == 7.0

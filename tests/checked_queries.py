@@ -81,6 +81,22 @@ DEFAULT_SPRINTS: tuple[FixtureSprint, ...] = (
     FixtureSprint(79, "Payments R3", "future"),
 )
 
+DEFAULT_BOARD_CONFIG: dict = {
+    "id": BOARD_ID,
+    "name": "Payments Scrum Board",
+    "filter": {"id": "1001"},
+    "estimation": {
+        "type": "field",
+        "field": {"fieldId": "customfield_10002", "displayName": "Story Points"},
+    },
+    "columnConfig": {
+        "columns": [
+            {"name": "To Do", "statuses": [{"id": "1"}]},
+            {"name": "Done", "statuses": [{"id": "5"}]},
+        ]
+    },
+}
+
 DEFAULT_ISSUES: tuple[FixtureIssue, ...] = (
     FixtureIssue(
         key="PAY-1",
@@ -186,23 +202,37 @@ def _matches(issue: FixtureIssue, jql: str) -> bool:
 
 @dataclass
 class FakeJira:
-    """Mock transport serving fixture sprints/issues with real pagination."""
+    """Mock transport serving fixture sprints/issues with real pagination.
+
+    The collector routes (board configuration, issue changelogs) are served
+    here too; `updated >=` JQL clauses are deliberately not filtered so a
+    delta poll re-serves every fixture and replays exercise the dedup keys.
+    """
 
     sprints: tuple[FixtureSprint, ...] = DEFAULT_SPRINTS
     issues: tuple[FixtureIssue, ...] = DEFAULT_ISSUES
     page_size: int = 2
+    board_config: dict = field(default_factory=lambda: dict(DEFAULT_BOARD_CONFIG))
+    changelogs: dict[str, list[dict]] = field(default_factory=dict)
+    detail_overrides: dict[str, int] = field(default_factory=dict)
     search_calls: list[dict] = field(default_factory=list)
+    detail_calls: list[dict] = field(default_factory=list)
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path == f"/rest/agile/1.0/board/{BOARD_ID}/sprint":
             return self._sprints_page(request)
+        if path == f"/rest/agile/1.0/board/{BOARD_ID}/configuration":
+            return httpx.Response(200, json=self.board_config)
         match = re.fullmatch(r"/rest/agile/1.0/sprint/([1-9][0-9]*)", path)
         if match:
             return self._sprint_by_id(int(match.group(1)))
+        match = re.fullmatch(r"/rest/api/3/issue/([A-Za-z0-9-]+)/changelog", path)
+        if match:
+            return self._changelog_page(match.group(1), request)
         match = re.fullmatch(r"/rest/api/3/issue/([A-Za-z0-9-]+)", path)
         if match:
-            return self._issue_by_key(match.group(1))
+            return self._issue_by_key(match.group(1), request)
         if path == "/rest/api/3/project/PAY/statuses":
             return self._project_statuses()
         if path == "/rest/api/3/user/assignable/search":
@@ -270,11 +300,32 @@ class FakeJira:
                 return httpx.Response(200, json=sprint.payload())
         return httpx.Response(404, json={"errorMessages": ["Sprint does not exist"]})
 
-    def _issue_by_key(self, issue_key: str) -> httpx.Response:
+    def _issue_by_key(self, issue_key: str, request: httpx.Request) -> httpx.Response:
+        self.detail_calls.append(dict(request.url.params))
+        override = self.detail_overrides.get(issue_key)
+        if override is not None:
+            return httpx.Response(override, json={"errorMessages": ["not available"]})
         for issue in self.issues:
             if issue.key == issue_key:
                 return httpx.Response(200, json=issue.payload())
         return httpx.Response(404, json={"errorMessages": ["Issue does not exist"]})
+
+    def _changelog_page(self, issue_key: str, request: httpx.Request) -> httpx.Response:
+        entries = self.changelogs.get(issue_key, [])
+        params = request.url.params
+        start_at = int(params.get("startAt", "0"))
+        max_results = int(params.get("maxResults", "100"))
+        window = entries[start_at : start_at + max_results]
+        return httpx.Response(
+            200,
+            json={
+                "startAt": start_at,
+                "maxResults": max_results,
+                "total": len(entries),
+                "isLast": start_at + max_results >= len(entries),
+                "values": window,
+            },
+        )
 
     def _search(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)

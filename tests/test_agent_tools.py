@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from scrum_agent.agent.tools import make_tools
+from scrum_agent.jira.models import Issue
 from tests.agent_fakes import tools_over
 from tests.checked_queries import (
     DEFAULT_ISSUES,
@@ -71,6 +72,41 @@ def test_get_issue_returns_structured_payload_with_sources() -> None:
     assert issue["assignee"] is None
     assert payload["sources"] == [{"issue_key": "PAY-3"}]
     assert payload["fetched_at"].endswith("+00:00")
+
+
+def test_issue_payload_includes_full_details_for_direct_lookup() -> None:
+    from scrum_agent.agent.payloads import ok_issue_payload
+
+    issue = Issue(
+        key="PAY-1",
+        id="10001",
+        summary="Summary",
+        status="To Do",
+        issue_type="Story",
+        description="Description",
+        acceptance_criteria="Acceptance Criteria",
+        reporter="P. Manager",
+        labels=("payments",),
+        due_date="2026-10-15",
+        severity="High",
+        risk_rating="Medium",
+        issue_rating="3",
+        priority="High",
+    )
+
+    payload = ok_issue_payload("get_issue", issue)["issues"][0]
+
+    assert payload["description"] == "Description"
+    assert payload["acceptance_criteria"] == "Acceptance Criteria"
+    assert payload["reporter"] == "P. Manager"
+    assert payload["labels"] == ["payments"]
+    assert payload["due_date"] == "2026-10-15"
+    assert payload["severity"] == "High"
+    assert payload["risk_rating"] == "Medium"
+    assert payload["issue_rating"] == "3"
+    assert payload["priority"] == "High"
+    assert payload["subtasks"] == []
+    assert payload["linked_work_items"] == []
 
 
 def test_get_issue_strips_surrounding_whitespace() -> None:

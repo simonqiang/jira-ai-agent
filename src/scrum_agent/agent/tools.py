@@ -45,8 +45,9 @@ def make_tools(service: SearchService) -> list[FunctionTool]:
         """Fetch one issue by its exact key (for example PAY-3).
 
         Use for direct key lookups. Returns the issue's key, summary, status,
-        issue type, assignee and last-updated time with a fetched_at stamp,
-        or an error payload (permission_denied / not_found).
+        description, acceptance criteria, subtasks, linked work items, people,
+        labels, due date and ratings with a fetched_at stamp, or an error
+        payload (permission_denied / not_found).
         """
         try:
             return ok_issue_payload("get_issue", service.get_issue(_text(issue_key, "issue_key")))
