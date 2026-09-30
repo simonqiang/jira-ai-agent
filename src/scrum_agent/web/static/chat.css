@@ -178,3 +178,10 @@ button:disabled { opacity: 0.55; cursor: default; transform: none; box-shadow: n
   }
   html { scroll-behavior: auto; }
 }
+
+/* Week 5 report views */
+.narrative { white-space: pre-line; }
+.report-form form { display: flex; gap: .5rem; align-items: center; margin: 1rem 0; }
+.report-error { color: #b00020; }
+.note { color: #666; font-size: .9rem; }
+.report-header, .report-totals, .report-issues, .report-narrative { margin: 1rem 0; }

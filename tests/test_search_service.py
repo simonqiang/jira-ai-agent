@@ -92,25 +92,15 @@ def search_sprint_handler(calls: list[dict], *, search_payload: dict | None = No
 
 
 def test_resolve_sprint_by_id() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path.endswith("/sprint/78")
-        return ok(SPRINTS[1])
-
-    service, _ = make_service(handler)
+    service, _ = make_service(listing_handler(SPRINTS))
     sprint = service.resolve_sprint(78)
     assert (sprint.id, sprint.name) == (78, "Payments R2")
 
 
 def test_resolve_sprint_by_numeric_string_uses_id_lookup() -> None:
-    service, requests = make_service(
-        lambda request: (
-            ok(SPRINTS[1])
-            if request.url.path.endswith("/sprint/78")
-            else AssertionError(f"unexpected {request.url.path}")
-        )
-    )
+    service, requests = make_service(listing_handler(SPRINTS))
     assert service.resolve_sprint("78").id == 78
-    assert requests[0].url.path.endswith("/sprint/78")
+    assert requests[-1].url.path.endswith("/sprint/78")
 
 
 def test_resolve_sprint_exact_name() -> None:
@@ -187,6 +177,8 @@ def test_search_returns_complete_result_with_freshness_and_sprint() -> None:
         if request.url.path == "/rest/api/3/search/jql":
             calls.append(json.loads(request.content))
             return ok(pages[len(calls) - 1])
+        if request.url.path.endswith("/board/42/sprint"):
+            return ok({"isLast": True, "values": SPRINTS})
         if request.url.path.endswith("/sprint/78"):
             return ok(SPRINTS[1])
         if request.url.path == "/rest/api/3/project/PAY/statuses":

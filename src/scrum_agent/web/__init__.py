@@ -16,20 +16,28 @@ Security posture (pilot):
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
-from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi import FastAPI, Form, Request, Response
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from scrum_agent.agent.chat import ChatService
 from scrum_agent.agent.usage import UsageSnapshot
 from scrum_agent.config import Settings
+from scrum_agent.reports.exports import to_csv, to_markdown
+from scrum_agent.reports.jobs import job_view, run_forever
 from scrum_agent.web.linkify import linkify_issue_keys, localtime
 
 _SESSION_COOKIE = "scrum_agent_session"
@@ -78,12 +86,17 @@ def _loopback_ok(settings: Settings, request: Request) -> bool:
     return host_ok and origin_ok
 
 
-def create_app(settings: Settings, chat: ChatService) -> FastAPI:
-    """Build the chat web app bound to ``chat``."""
+def create_app(settings: Settings, chat: ChatService, jobs=None) -> FastAPI:
+    """Build the chat web app bound to ``chat`` (and report ``jobs``)."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        worker = None
+        if jobs is not None:
+            worker = asyncio.create_task(run_forever(jobs))
         yield
+        if worker is not None:
+            worker.cancel()
         await chat.aclose()
 
     app = FastAPI(
@@ -182,5 +195,65 @@ def create_app(settings: Settings, chat: ChatService) -> FastAPI:
     @app.get("/healthz")
     async def healthz() -> JSONResponse:
         return JSONResponse({"status": "ok"})
+
+    # -- reports (Week 5) ------------------------------------------------------
+
+    @app.get("/reports", response_class=HTMLResponse)
+    async def reports_page(request: Request, error: str = "") -> HTMLResponse:
+        sprints = chat.service.list_sprints(states=("active", "future"))
+        return templates.TemplateResponse(
+            request=request,
+            name="reports.html",
+            context={
+                **template_globals(),
+                "sprints": sprints,
+                "error": error,
+                "page": "reports",
+            },
+        )
+
+    @app.post("/reports")
+    async def submit_report(request: Request, sprint: str = Form(...)) -> Response:
+        if jobs is None:
+            return RedirectResponse("/reports?error=Reports+need+the+local+database", 303)
+        try:
+            handle = jobs.submit(sprint.strip())
+        except Exception as exc:
+            message = str(exc).replace("\n", " ")[:300]
+            return RedirectResponse(f"/reports?error={quote(message)}", 303)
+        return RedirectResponse(f"/reports/{handle['job_id']}", 303)
+
+    @app.get("/reports/{job_id}", response_class=HTMLResponse)
+    async def report_view(request: Request, job_id: int) -> HTMLResponse:
+        row = jobs.storage().get_report_job(job_id) if jobs is not None else None
+        if row is None:
+            return PlainTextResponse("No such report job.", status_code=404)
+        view = job_view(row)
+        return templates.TemplateResponse(
+            request=request,
+            name="report.html",
+            context={
+                **template_globals(),
+                "job": view,
+                "report": view.get("report"),
+                "page": "reports",
+            },
+        )
+
+    @app.get("/reports/{job_id}/report.{fmt}")
+    async def report_export(job_id: int, fmt: str) -> Response:
+        if jobs is None or fmt not in ("md", "csv"):
+            return PlainTextResponse("No such export.", status_code=404)
+        row = jobs.storage().get_report_job(job_id)
+        if row is None or row["status"] != "done" or row["report"] is None:
+            return PlainTextResponse("Report not finished; export unavailable.", status_code=404)
+        content = to_markdown(row["report"]) if fmt == "md" else to_csv(row["report"])
+        media = "text/markdown; charset=utf-8" if fmt == "md" else "text/csv; charset=utf-8"
+        filename = f"sprint-{row['sprint_id']}-report.{fmt}"
+        return Response(
+            content,
+            media_type=media,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     return app

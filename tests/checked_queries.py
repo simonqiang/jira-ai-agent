@@ -60,19 +60,27 @@ class FixtureIssue:
     labels: tuple[str, ...] = ()
     sprint_id: int | None = None
     resolved: bool = False
+    estimate: float | None = None  # board field customfield_10002
 
     def payload(self) -> dict:
-        return {
-            "id": f"1{abs(hash(self.key)) % 10000:04d}",
-            "key": self.key,
-            "fields": {
-                "summary": self.summary,
-                "status": {"name": self.status},
-                "issuetype": {"name": self.issue_type},
-                "assignee": ({"displayName": self.assignee} if self.assignee is not None else None),
-                "updated": "2026-09-27T08:00:00.000+0000",
-            },
+        fields = {
+            "summary": self.summary,
+            "status": {"id": "5" if self.resolved else "1", "name": self.status},
+            "issuetype": {"name": self.issue_type},
+            "assignee": ({"displayName": self.assignee} if self.assignee is not None else None),
+            "labels": list(self.labels),
+            "updated": "2026-09-27T08:00:00.000+0000",
         }
+        if self.estimate is not None:
+            fields["customfield_10002"] = self.estimate
+        if self.sprint_id is not None:
+            # The real sprint field is a greenhopper string; the report input
+            # parser reads membership out of its id=NN segment.
+            fields["sprint"] = [
+                "com.atlassian.greenhopper.service.sprint.Sprint@1"
+                f"[id={self.sprint_id},rapidViewId=42,state=ACTIVE,name=Sprint]"
+            ]
+        return {"id": f"1{abs(hash(self.key)) % 10000:04d}", "key": self.key, "fields": fields}
 
 
 DEFAULT_SPRINTS: tuple[FixtureSprint, ...] = (
@@ -104,9 +112,10 @@ DEFAULT_ISSUES: tuple[FixtureIssue, ...] = (
         status="In Progress",
         issue_type="Bug",
         assignee="A. Developer",
-        labels=("payments", "checkout"),
+        labels=("payments", "checkout", "blocked"),
         sprint_id=78,
         resolved=False,
+        estimate=3,
     ),
     FixtureIssue(
         key="PAY-2",
@@ -117,6 +126,7 @@ DEFAULT_ISSUES: tuple[FixtureIssue, ...] = (
         labels=("payments", "webhook"),
         sprint_id=78,
         resolved=True,
+        estimate=2,
     ),
     FixtureIssue(
         key="PAY-3",
@@ -215,6 +225,7 @@ class FakeJira:
     board_config: dict = field(default_factory=lambda: dict(DEFAULT_BOARD_CONFIG))
     changelogs: dict[str, list[dict]] = field(default_factory=dict)
     detail_overrides: dict[str, int] = field(default_factory=dict)
+    unlisted_sprints: tuple[FixtureSprint, ...] = ()  # by-ID only: not on the board
     search_calls: list[dict] = field(default_factory=list)
     detail_calls: list[dict] = field(default_factory=list)
 
@@ -295,7 +306,7 @@ class FakeJira:
         )
 
     def _sprint_by_id(self, sprint_id: int) -> httpx.Response:
-        for sprint in self.sprints:
+        for sprint in (*self.sprints, *self.unlisted_sprints):
             if sprint.id == sprint_id:
                 return httpx.Response(200, json=sprint.payload())
         return httpx.Response(404, json={"errorMessages": ["Sprint does not exist"]})
@@ -437,7 +448,8 @@ def _with_foreign_issue() -> FakeJira:
 def _with_foreign_sprint() -> FakeJira:
     return FakeJira(
         sprints=DEFAULT_SPRINTS
-        + (FixtureSprint(81, "Cross-board sprint", "active", OTHER_BOARD_ID),)
+        + (FixtureSprint(81, "Cross-board sprint", "active", OTHER_BOARD_ID),),
+        unlisted_sprints=(FixtureSprint(82, "Hidden sprint", "active", OTHER_BOARD_ID),),
     )
 
 
@@ -532,19 +544,20 @@ CHECKED_QUERIES: tuple[CheckedQuery, ...] = (
         ),
     ),
     CheckedQuery(
-        name="foreign-board-sprint-in-listing-fails-closed",
-        intent="A sprint from another board never enters sprint selection",
-        make_jira=_with_foreign_sprint,
-        verify=lambda service, jira: _expect_error(
-            JiraPermissionError, lambda: service.list_sprints()
+        name="foreign-origin-sprint-listed-by-board-is-in-scope",
+        intent=(
+            "The board's own sprint listing is the scope authority: real boards "
+            "list sprints that originate on another board"
         ),
+        make_jira=_with_foreign_sprint,
+        verify=lambda service, jira: _check(81 in [sprint.id for sprint in service.list_sprints()]),
     ),
     CheckedQuery(
-        name="foreign-board-sprint-by-id-fails-closed",
-        intent="Direct sprint lookup outside the pilot board is denied",
+        name="unlisted-sprint-by-id-fails-closed",
+        intent="A sprint the pilot board does not list is denied by ID",
         make_jira=_with_foreign_sprint,
         verify=lambda service, jira: _expect_error(
-            JiraPermissionError, lambda: service.resolve_sprint(81)
+            JiraPermissionError, lambda: service.resolve_sprint(82)
         ),
     ),
 )

@@ -385,3 +385,126 @@ def test_freshness_exits_zero_when_healthy(monkeypatch, capsys) -> None:
 
     assert app.main(["freshness"]) == 0
     assert "Credential: unknown" in capsys.readouterr().out
+
+
+# -- report command (Week 5) ------------------------------------------------------
+
+
+class _FakeJobStorage:
+    def get_report_job(self, job_id: int):
+        from datetime import UTC, datetime
+
+        return {
+            "id": job_id,
+            "request_key": "k",
+            "kind": "sprint_report",
+            "board_id": 42,
+            "sprint_id": 78,
+            "status": "done",
+            "attempts": 1,
+            "estimate_seconds": 4,
+            "requested_at": datetime.now(UTC),
+            "started_at": datetime.now(UTC),
+            "finished_at": datetime.now(UTC),
+            "error": None,
+            "report": {
+                "kind": "sprint_report",
+                "site": "test.atlassian.net",
+                "board_id": 42,
+                "sprint": {
+                    "id": 78,
+                    "name": "Payments R2",
+                    "state": "active",
+                    "goal": None,
+                    "start_date": None,
+                    "end_date": None,
+                    "complete_date": None,
+                },
+                "timezone": "Asia/Hong_Kong",
+                "cutoff_at": "2026-09-30T08:00:00+00:00",
+                "generated_at": "2026-09-30T08:00:00+00:00",
+                "metric_policy_version": "adr-0002/current-state",
+                "scope": {"total": 1, "by_type": {"Bug": 1}},
+                "status_counts": {"To Do": 1},
+                "done": {"count": 0, "not_done_count": 1, "done_status_ids": ["5"]},
+                "estimates": {
+                    "field": "customfield_10002",
+                    "field_name": "Story Points",
+                    "with_estimate": 0,
+                    "missing_estimate": 1,
+                    "missing_estimate_keys": ["PAY-1"],
+                    "total": 0.0,
+                    "done_total": 0.0,
+                    "not_done_total": 0.0,
+                },
+                "blockers": [],
+                "attention": {"unassigned_not_done": ["PAY-1"], "missing_estimate": ["PAY-1"]},
+                "excluded": {"count": 0, "keys": []},
+                "freshness": {
+                    "last_success_at": None,
+                    "success_age": None,
+                    "alarms": [],
+                    "warnings": [],
+                },
+                "completeness": "complete",
+                "completeness_notes": [],
+                "issues": [],
+                "narrative": "Sprint Payments R2: quiet sprint.",
+            },
+        }
+
+
+class _FakeReportJobs(_FakeJobStorage):
+    def __init__(self, settings) -> None:
+        assert settings.database_url
+
+    def submit(self, reference):
+        return {
+            "job_id": 7,
+            "status": "queued",
+            "sprint_id": 78,
+            "sprint_name": "Payments R2",
+            "estimate_seconds": 4,
+            "reused": False,
+        }
+
+    def run_once(self) -> int:
+        return 7
+
+    def storage(self) -> "_FakeReportJobs":
+        return self
+
+    def close(self) -> None:
+        pass
+
+
+def test_report_command_prints_markdown(monkeypatch, capsys) -> None:
+    import scrum_agent.reports.jobs as jobs_module
+
+    monkeypatch.setattr(jobs_module, "ReportJobs", _FakeReportJobs)
+    monkeypatch.setattr(
+        app, "Settings", lambda: make_settings(database_url="postgresql://localhost/db")
+    )
+    assert app.main(["report", "--sprint", "Payments R2"]) == 0
+    out = capsys.readouterr().out
+    assert "Report job 7 for sprint Payments R2" in out
+    assert "Sprint report: Payments R2" in out
+
+
+def test_report_command_writes_csv_export(monkeypatch, capsys, tmp_path) -> None:
+    import scrum_agent.reports.jobs as jobs_module
+
+    monkeypatch.setattr(jobs_module, "ReportJobs", _FakeReportJobs)
+    monkeypatch.setattr(
+        app, "Settings", lambda: make_settings(database_url="postgresql://localhost/db")
+    )
+    target = tmp_path / "report.csv"
+    assert app.main(["report", "--sprint", "78", "--format", "csv", "--out", str(target)]) == 0
+    assert "Scope (current),1" in target.read_text()
+    assert "Wrote" in capsys.readouterr().out
+
+
+def test_report_command_requires_database(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(app, "Settings", lambda: make_settings())
+    assert app.main(["report", "--sprint", "78"]) == 2
+    assert "DATABASE_URL" in capsys.readouterr().err

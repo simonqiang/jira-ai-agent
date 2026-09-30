@@ -172,3 +172,113 @@ def test_web_host_accepts_ipv6_loopback() -> None:
 def test_model_base_url_must_be_clean_https(url: str) -> None:
     with pytest.raises(ValidationError):
         make_settings(model_base_url=url)
+
+
+# -- reports pages (Week 5) -------------------------------------------------------
+
+# These use a plain TestClient (no `with`), so the app lifespan — and its
+# background worker — never starts; the test drives the worker manually.
+
+
+def make_report_app():
+    import httpx
+
+    from scrum_agent.jira.client import JiraClient
+    from scrum_agent.reports.jobs import ReportJobs
+    from tests.checked_queries import FakeJira
+    from tests.test_reports import collect_into_storage
+
+    chat, jira, _ = make_chat()
+    storage = collect_into_storage(FakeJira())
+    db_settings = make_settings(database_url="postgresql://localhost/scrum_agent")
+    client = JiraClient(db_settings, transport=httpx.MockTransport(FakeJira().handler))
+    jobs = ReportJobs(db_settings, client=client, storage=storage)
+    app = create_app(make_settings(), chat, jobs)
+    return app, jobs, storage
+
+
+def test_reports_page_lists_board_sprints() -> None:
+    app, *_ = make_report_app()
+    client = client_for(app)
+    response = client.get("/reports")
+    assert response.status_code == 200
+    assert "Payments R2" in response.text
+    assert 'value="78"' in response.text
+
+
+def test_submit_view_and_export_a_report() -> None:
+    app, jobs, _ = make_report_app()
+    client = client_for(app)
+    submitted = client.post("/reports", data={"sprint": "78"})
+    assert submitted.status_code == 303
+    assert submitted.headers["location"] == "/reports/1"
+
+    pending = client.get("/reports/1")
+    assert "queued" in pending.text
+
+    jobs.run_once()
+    done = client.get("/reports/1")
+    assert "Payments R2" in done.text
+    assert "Estimates total" in done.text
+    assert "complete" in done.text
+    assert "/reports/1/report.md" in done.text
+    assert "/reports/1/report.csv" in done.text
+
+    markdown = client.get("/reports/1/report.md")
+    assert markdown.status_code == 200
+    assert "text/markdown" in markdown.headers["content-type"]
+    assert "Sprint report: Payments R2" in markdown.text
+    csv_export = client.get("/reports/1/report.csv")
+    assert "text/csv" in csv_export.headers["content-type"]
+    assert "Scope (current),3" in csv_export.text
+    assert client.get("/reports/1/report.xml").status_code == 404
+
+
+def test_report_export_before_completion_is_404() -> None:
+    app, jobs, _ = make_report_app()
+    client = client_for(app)
+    client.post("/reports", data={"sprint": "78"})
+    assert client.get("/reports/1/report.md").status_code == 404
+
+
+def test_ambiguous_sprint_submission_returns_to_form_with_error() -> None:
+    app, *_ = make_report_app()
+    client = client_for(app)
+    response = client.post("/reports", data={"sprint": "Payments"})
+    assert response.status_code == 303
+    assert "matches%203%20sprints" in response.headers["location"]
+
+
+def test_reports_without_jobs_redirect_with_error() -> None:
+    chat, *_ = make_chat()
+    app = create_app(make_settings(), chat)
+    client = client_for(app)
+    response = client.post("/reports", data={"sprint": "78"})
+    assert response.status_code == 303
+    assert "database" in response.headers["location"]
+
+
+def test_report_view_escapes_untrusted_issue_text() -> None:
+    import dataclasses
+
+    import httpx
+
+    from scrum_agent.jira.client import JiraClient
+    from scrum_agent.reports.jobs import ReportJobs
+    from tests.checked_queries import DEFAULT_ISSUES, FakeJira
+    from tests.test_reports import collect_into_storage
+
+    evil = dataclasses.replace(DEFAULT_ISSUES[0], summary="<script>alert(1)</script>")
+    jira = FakeJira(issues=(evil, *DEFAULT_ISSUES[1:]))
+    chat, _, _ = make_chat()
+    storage = collect_into_storage(jira)
+    db_settings = make_settings(database_url="postgresql://localhost/scrum_agent")
+    client = JiraClient(db_settings, transport=httpx.MockTransport(jira.handler))
+    jobs = ReportJobs(db_settings, client=client, storage=storage)
+    app = create_app(make_settings(), chat, jobs)
+    web = client_for(app)
+    web.post("/reports", data={"sprint": "78"})
+    jobs.run_once()
+    page = web.get("/reports/1")
+    assert "<script>" not in page.text
+    assert "&lt;script&gt;" in page.text

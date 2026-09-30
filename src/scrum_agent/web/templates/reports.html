@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="scope">
+  <h1>Sprint reports</h1>
+  <p>Project {{ project_key }} &middot; board {{ board_id }} &middot; <a href="/">back to chat</a></p>
+</header>
+
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<section class="report-form">
+  <form action="/reports" method="post">
+    <label for="sprint">Sprint:</label>
+    <select name="sprint" id="sprint" required>
+      {% for sprint in sprints %}
+      <option value="{{ sprint.id }}">{{ sprint.name }} ({{ sprint.state }}, sprint {{ sprint.id }})</option>
+      {% endfor %}
+    </select>
+    <button type="submit">Generate report</button>
+  </form>
+  {% if not sprints %}<p>No active or future sprints found on the board.</p>{% endif %}
+</section>
+{% endblock %}

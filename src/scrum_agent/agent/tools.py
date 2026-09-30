@@ -1,15 +1,19 @@
 """Narrow, read-only ADK tools over the Week 2 search service.
 
-Four tools only: ``get_issue``, ``list_sprints``, ``search_issues`` and
-``search_sprint``. Inputs are plain JSON primitives (ADK's argument coercion
-swallows ``ValidationError`` for model classes, so ``IssueFilters`` is built
-inside each tool); outputs are the structured payloads from ``payloads.py``.
-No tool accepts raw JQL, credentials or any write parameter, and no tool can
-widen scope: every call delegates to ``SearchService``, which enforces
-``PilotScope`` end to end.
+Four search tools (``get_issue``, ``list_sprints``, ``search_issues``,
+``search_sprint``) plus the two Week 5 report tools
+(``build_sprint_report``/``get_report``), which never block the conversation:
+building returns a job handle and polling returns status or the finished
+report. Inputs are plain JSON primitives (ADK's argument coercion swallows
+``ValidationError`` for model classes, so ``IssueFilters`` is built inside each
+tool); outputs are structured payloads. No tool accepts raw JQL, credentials
+or any write parameter, and no tool can widen scope: every call delegates to
+``SearchService``/``ReportJobs``, which enforce ``PilotScope`` end to end.
 """
 
 from __future__ import annotations
+
+from datetime import UTC, datetime
 
 from google.adk.tools import FunctionTool
 
@@ -20,6 +24,7 @@ from scrum_agent.agent.payloads import (
     ok_search_payload,
     ok_sprints_payload,
 )
+from scrum_agent.reports.jobs import job_view
 from scrum_agent.search.filters import IssueFilters
 from scrum_agent.search.service import SearchService
 
@@ -38,8 +43,8 @@ def _text(value: object, name: str) -> str:
     return value.strip()
 
 
-def make_tools(service: SearchService) -> list[FunctionTool]:
-    """Build the four read-only tools bound to ``service``."""
+def make_tools(service: SearchService, jobs=None) -> list[FunctionTool]:
+    """Build the read-only tools bound to ``service`` (and report ``jobs``)."""
 
     def get_issue(issue_key: str) -> dict:
         """Fetch one issue by its exact key (for example PAY-3).
@@ -128,9 +133,73 @@ def make_tools(service: SearchService) -> list[FunctionTool]:
         except Exception as exc:
             return error_payload("search_sprint", exc)
 
+    def build_sprint_report(sprint_reference: str | int) -> dict:
+        """Start generating a sprint report and return a job handle immediately.
+
+        sprint_reference is a sprint name, unique substring or numeric ID;
+        ambiguous references return error kind ambiguous_sprint with candidates:
+        ask the user to choose. The handle carries job_id, status and
+        estimate_seconds; report generation runs in a local worker and never
+        blocks this conversation. Call `get_report` with the job_id to poll.
+        """
+        try:
+            if jobs is None:
+                raise ValueError(
+                    "reports require the local database (SCRUM_AGENT_DATABASE_URL); "
+                    "start it with `docker compose up -d`"
+                )
+            handle = jobs.submit(sprint_reference)
+            return {
+                "ok": True,
+                "tool": "build_sprint_report",
+                "job_id": handle["job_id"],
+                "status": handle["status"],
+                "sprint_id": handle["sprint_id"],
+                "sprint_name": handle["sprint_name"],
+                "estimate_seconds": handle["estimate_seconds"],
+                "reused": handle["reused"],
+                "fetched_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                "sources": [{"sprint_id": handle["sprint_id"]}],
+            }
+        except Exception as exc:
+            return error_payload("build_sprint_report", exc)
+
+    def get_report(job_id: int) -> dict:
+        """Poll a report job: status while it runs, the full report when done.
+
+        job_id comes from build_sprint_report. While status is queued/running,
+        tell the user it is still generating. When done, the report carries the
+        computed totals, blockers, freshness, completeness and narrative — its
+        numbers are already computed; never recalculate or add to them. An
+        error status carries the failure message in job.error.
+        """
+        try:
+            if jobs is None:
+                raise ValueError(
+                    "reports require the local database (SCRUM_AGENT_DATABASE_URL); "
+                    "start it with `docker compose up -d`"
+                )
+            row = jobs.storage().get_report_job(int(job_id))
+            if row is None:
+                raise ValueError(f"No report job {job_id} exists; build one first")
+            view = job_view(row)
+            report = view.pop("report", None)
+            return {
+                "ok": True,
+                "tool": "get_report",
+                "job": view,
+                "report": report,
+                "fetched_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                "sources": [{"sprint_id": view["sprint_id"]}],
+            }
+        except Exception as exc:
+            return error_payload("get_report", exc)
+
     return [
         FunctionTool(func=get_issue),
         FunctionTool(func=list_sprints),
         FunctionTool(func=search_issues),
         FunctionTool(func=search_sprint),
+        FunctionTool(func=build_sprint_report),
+        FunctionTool(func=get_report),
     ]

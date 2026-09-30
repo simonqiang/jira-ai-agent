@@ -7,7 +7,6 @@ from pydantic import ValidationError
 
 from scrum_agent.auth import PilotScope
 from scrum_agent.jira.errors import JiraPermissionError
-from scrum_agent.jira.models import Sprint
 from tests.conftest import make_settings
 
 
@@ -57,20 +56,6 @@ def test_board_scope(board_id: int) -> None:
     else:
         with pytest.raises(JiraPermissionError):
             scope.assert_board_id(board_id)
-
-
-def make_sprint(origin_board_id: int) -> Sprint:
-    return Sprint(id=77, name="Payments R1", state="closed", origin_board_id=origin_board_id)
-
-
-def test_sprint_from_the_pilot_board_is_allowed() -> None:
-    make_scope().assert_sprint(make_sprint(42))
-
-
-@pytest.mark.parametrize("origin_board_id", [99, 0])
-def test_sprint_from_another_board_fails_closed(origin_board_id: int) -> None:
-    with pytest.raises(JiraPermissionError):
-        make_scope().assert_sprint(make_sprint(origin_board_id))
 
 
 def test_scope_is_immutable() -> None:

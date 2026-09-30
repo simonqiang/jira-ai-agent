@@ -46,6 +46,18 @@ def test_initial_migration_matches_schema_contract() -> None:
     assert "deleted_at" in sql
 
 
+def test_report_jobs_migration_matches_schema_contract() -> None:
+    sql = (
+        resources.files("scrum_agent")
+        .joinpath("migrations")
+        .joinpath("002_report_jobs.sql")
+        .read_text()
+    )
+    assert "CREATE TABLE IF NOT EXISTS scrum_agent.report_jobs" in sql
+    assert "request_key      text NOT NULL UNIQUE" in sql  # idempotent identity
+    assert "CHECK (status IN ('queued', 'running', 'done', 'error'))" in sql
+
+
 @requires_db
 def test_migrations_and_repository_round_trip() -> None:
     import psycopg
@@ -121,5 +133,29 @@ def test_migrations_and_repository_round_trip() -> None:
     assert freshness["live_issues"] == 1
     assert freshness["events_total"] == 1
     assert freshness["last_success_at"] is not None
+
+    # Week 5 report jobs: identity dedup, claim, finish, orphan requeue.
+    job_id, created = storage.submit_report_job(
+        request_key="rk-1", board_id=42, sprint_id=78, estimate_seconds=4
+    )
+    again, created_again = storage.submit_report_job(
+        request_key="rk-1", board_id=42, sprint_id=78, estimate_seconds=4
+    )
+    assert (job_id, created, again, created_again) == (job_id, True, job_id, False)
+    assert storage.live_snapshots()[0]["issue_key"] == "PAY-1"
+
+    claimed = storage.claim_next_report_job()
+    assert claimed["id"] == job_id
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE scrum_agent.report_jobs SET status = 'running' WHERE id = %s", (job_id,)
+        )
+    assert storage.claim_next_report_job()["id"] == job_id  # orphan requeued
+
+    storage.finish_report_job(job_id, status="done", report={"scope": {"total": 3}})
+    row = storage.get_report_job(job_id)
+    assert row["status"] == "done"
+    assert row["report"] == {"scope": {"total": 3}}  # jsonb round-trips as dict
+    assert storage.claim_next_report_job() is None
 
     conn.close()
