@@ -174,6 +174,15 @@ def test_unknown_fields_are_ignored_not_errors() -> None:
     assert not any(section["key"] == "not_a_real_field" for section in draft["sections"])
 
 
+def test_non_string_and_whitespace_values_count_as_missing() -> None:
+    """_clean never invents: junk values degrade to open questions, not content."""
+    template = get_template(default_templates(), "Task")
+    draft = build_draft(template, {"objective": 42, "scope": "   "})
+    assert draft["missing_required_fields"] == ["objective"]
+    assert "scope" in draft["missing_team_policy_fields"]
+    assert draft["ready"] is False
+
+
 def test_build_draft_accepts_none_fields() -> None:
     template = get_template(default_templates(), "Task")
     draft = build_draft(template, None)

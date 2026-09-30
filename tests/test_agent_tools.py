@@ -439,6 +439,13 @@ def test_draft_ticket_unknown_issue_type_is_invalid_input() -> None:
     assert payload["error"]["kind"] == "invalid_input"
 
 
+def test_draft_ticket_non_dict_fields_is_invalid_input() -> None:
+    with tools_over(FakeJira()) as tools:
+        payload = tools["draft_ticket"](issue_type="Task", fields="objective")
+    assert payload["ok"] is False
+    assert payload["error"]["kind"] == "invalid_input"
+
+
 def test_draft_ticket_accepts_no_fields() -> None:
     with tools_over(FakeJira()) as tools:
         payload = tools["draft_ticket"](issue_type="Task")
