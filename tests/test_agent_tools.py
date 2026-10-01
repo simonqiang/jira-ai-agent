@@ -31,6 +31,7 @@ READ_ONLY_TOOL_NAMES = {
     "get_report",
     "list_draft_templates",
     "draft_ticket",
+    "find_related_tickets",
 }
 
 
@@ -451,3 +452,84 @@ def test_draft_ticket_accepts_no_fields() -> None:
         payload = tools["draft_ticket"](issue_type="Task")
     assert payload["ok"] is True
     assert payload["ready"] is False
+
+
+# -- find_related_tickets (Week 10) ------------------------------------------------
+
+
+class _StubRetrieval:
+    def __init__(self, result=None, error: Exception | None = None):
+        self._result = result
+        self._error = error
+        self.calls: list[tuple[str, int]] = []
+
+    def search(self, query: str, *, top_k: int = 5):
+        if not query.strip():  # mirror RetrievalService's input validation
+            raise ValueError("query must not be blank")
+        self.calls.append((query, top_k))
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
+def _retrieval_result():
+    from datetime import UTC, datetime
+
+    from scrum_agent.retrieval.models import ExcludedSource, RetrievalResult, RetrievedChunk
+
+    return RetrievalResult(
+        query="payment retry",
+        hits=(
+            RetrievedChunk(
+                issue_key="PAY-1",
+                source_url="https://test.atlassian.net/browse/PAY-1",
+                title="Payment retry fails silently",
+                chunk_kind="summary",
+                heading=None,
+                snippet="Payment retry fails silently",
+                similarity=0.8,
+                score=0.0328,
+            ),
+        ),
+        excluded=(ExcludedSource(issue_key="PAY-9", reason="stale"),),
+        jql="key in (PAY-1, PAY-9)",
+        fetched_at=datetime(2026, 10, 2, 12, 0, tzinfo=UTC),
+    )
+
+
+def test_find_related_tickets_payload_carries_verified_hits_and_exclusions() -> None:
+    from tests.agent_fakes import service_over
+
+    stub = _StubRetrieval(_retrieval_result())
+    with service_over(FakeJira()) as probe:
+        tools = {tool.name: tool.func for tool in make_tools(probe.service, None, stub)}
+    payload = tools["find_related_tickets"]("payment retry", top_k=3)
+
+    assert payload["ok"] is True
+    assert payload["hits"][0]["issue_key"] == "PAY-1"
+    assert payload["excluded"] == [{"issue_key": "PAY-9", "reason": "stale"}]
+    assert payload["sources"] == [{"issue_key": "PAY-1"}]
+    assert stub.calls == [("payment retry", 3)]
+
+
+def test_find_related_tickets_without_retrieval_is_a_clear_error() -> None:
+    from tests.agent_fakes import service_over
+
+    with service_over(FakeJira()) as probe:
+        tools = {tool.name: tool.func for tool in make_tools(probe.service)}
+    payload = tools["find_related_tickets"]("payment retry")
+    assert payload["ok"] is False
+    assert payload["error"]["kind"] == "invalid_input"
+    assert "SCRUM_AGENT_EMBEDDING_MODEL" in payload["error"]["message"]
+
+
+def test_find_related_tickets_validates_inputs_and_translates_errors() -> None:
+    from tests.agent_fakes import service_over
+
+    stub = _StubRetrieval(_retrieval_result())
+    with service_over(FakeJira()) as probe:
+        tools = {tool.name: tool.func for tool in make_tools(probe.service, None, stub)}
+
+    assert tools["find_related_tickets"]("   ")["ok"] is False
+    assert tools["find_related_tickets"]("q", top_k=99)["ok"] is False
+    assert stub.calls == []  # neither call reached the service

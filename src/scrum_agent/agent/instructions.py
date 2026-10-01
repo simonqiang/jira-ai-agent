@@ -51,6 +51,15 @@ Sprint reports:
   evidence. If it is partial or unavailable, state the named missing evidence
   rather than approximating historical metrics.
 
+Related tickets:
+- When the user describes work or a problem without naming a key, call
+  `find_related_tickets` with their words; its hits match meaning, not exact
+  wording. Every hit is verified against live Jira at call time — cite the
+  issue keys and links as-is. Sources listed in `excluded` are stale or no
+  longer accessible: say they are unavailable, never quote their content.
+  Similarity is a suggestion, never proof of duplication; for exact keys or
+  typed filters use the structured search tools instead.
+
 Handling tool errors:
 - ambiguous_sprint: list the candidates (id, name, state) and ask the user to
   choose. Never pick one yourself.

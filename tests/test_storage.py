@@ -334,3 +334,131 @@ def test_ticket_update_records_round_trip() -> None:
             requested={},
             started_at=moment,
         )
+
+
+def test_retrieval_migration_matches_schema_contract() -> None:
+    sql = (
+        resources.files("scrum_agent")
+        .joinpath("migrations")
+        .joinpath("005_retrieval.sql")
+        .read_text()
+    )
+    assert "CREATE EXTENSION IF NOT EXISTS vector" in sql
+    assert "CREATE TABLE IF NOT EXISTS scrum_agent.issue_chunks" in sql
+    # Source revision, content hash and embedding provenance per chunk (spec §7).
+    for column in (
+        "source_updated",
+        "content_hash",
+        "source_url",
+        "embedding_model",
+        "content_tsv",
+    ):
+        assert column in sql
+    # One row per (issue, kind, position); replacements never duplicate.
+    assert "UNIQUE (issue_id, chunk_kind, chunk_index)" in sql
+    # No approximate index until a benchmark justifies one (spec §7).
+    assert "ivfflat" not in sql and "hnsw" not in sql
+
+
+@requires_db
+def test_retrieval_chunks_round_trip() -> None:
+    import psycopg
+    from psycopg.rows import dict_row
+
+    from scrum_agent.storage.db import run_migrations
+    from scrum_agent.storage.repository import PgStorage, _vector_literal
+
+    conn = psycopg.connect(
+        _TEST_DSN, row_factory=dict_row, options="-c timezone=UTC", autocommit=True
+    )
+    with conn.cursor() as cur:
+        cur.execute("DROP SCHEMA IF EXISTS scrum_agent CASCADE")
+        cur.execute("DROP TABLE IF EXISTS public.schema_migrations")
+    assert "005_retrieval.sql" in run_migrations(conn)
+
+    storage = PgStorage(conn)
+    run_id = storage.start_run()
+    moment = datetime(2026, 10, 2, 8, 0, tzinfo=UTC)
+    for key, summary in (("PAY-1", "Payment retry fails silently"), ("PAY-2", "Refund missing")):
+        storage.upsert_snapshot(
+            issue_id=f"100{key}",
+            issue_key=key,
+            summary=summary,
+            status="Open",
+            issue_type="Bug",
+            assignee=None,
+            updated=moment,
+            fields={},
+            run_id=run_id,
+        )
+
+    def chunk_rows(issue_key: str, vectors: list[list[float]]) -> list[tuple]:
+        return [
+            ("summary", index, None, f"{issue_key} summary", f"hash-{issue_key}-{index}", vector)
+            for index, vector in enumerate(vectors)
+        ]
+
+    storage.replace_chunks(
+        issue_id="100PAY-1",
+        issue_key="PAY-1",
+        site="test.atlassian.net",
+        project_key="PAY",
+        source_updated=moment,
+        rows=chunk_rows("PAY-1", [[1.0, 0.0, 0.0]]),
+        embedding_model="test-model",
+    )
+    storage.replace_chunks(
+        issue_id="100PAY-2",
+        issue_key="PAY-2",
+        site="test.atlassian.net",
+        project_key="PAY",
+        source_updated=moment,
+        rows=chunk_rows("PAY-2", [[0.0, 1.0, 0.0]]),
+        embedding_model="test-model",
+    )
+    signatures = storage.chunk_signatures()
+    assert signatures == {
+        "100PAY-1": (moment, "test-model"),
+        "100PAY-2": (moment, "test-model"),
+    }
+
+    # Vector ranking: the query nearest PAY-1's vector finds PAY-1 first, and
+    # each issue appears at most once even with several chunks.
+    storage.replace_chunks(
+        issue_id="100PAY-1",
+        issue_key="PAY-1",
+        site="test.atlassian.net",
+        project_key="PAY",
+        source_updated=moment,
+        rows=chunk_rows("PAY-1", [[1.0, 0.0, 0.0], [0.9, 0.1, 0.0]]),
+        embedding_model="test-model",
+    )
+    rows = storage.hybrid_search(
+        query="retry summary",
+        query_embedding=[0.95, 0.05, 0.0],
+        embedding_model="test-model",
+        limit=5,
+    )
+    assert [row["issue_key"] for row in rows] == ["PAY-1", "PAY-2"]  # fused order, deduped
+    # similarity is the raw cosine of the issue's best chunk ([0.9, 0.1, 0.0]).
+    assert rows[0]["similarity"] == pytest.approx(0.9984, abs=1e-3)
+    assert rows[0]["source_url"] == "https://test.atlassian.net/browse/PAY-1"
+
+    # A different model's vectors are never mixed into the results.
+    assert (
+        storage.hybrid_search(
+            query="retry summary",
+            query_embedding=[1.0, 0.0, 0.0],
+            embedding_model="other-model",
+            limit=5,
+        )
+        == []
+    )
+
+    # Failed rechecks and tombstones invalidate chunks.
+    storage.delete_chunks(issue_key="PAY-1")
+    assert set(storage.chunk_signatures()) == {"100PAY-2"}
+    storage.tombstone_issue("PAY-2")
+    storage.prune_orphan_chunks()
+    assert storage.chunk_signatures() == {}
+    assert _vector_literal([1.0]) == "[1.0]"

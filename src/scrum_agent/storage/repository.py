@@ -48,6 +48,11 @@ def entry_rows(entries: list[ChangelogEntry]) -> list[tuple]:
     return rows
 
 
+def _vector_literal(vector: list[float]) -> str:
+    """pgvector text literal, cast to vector at the call site."""
+    return "[" + ",".join(repr(float(value)) for value in vector) + "]"
+
+
 class PgStorage:
     """Collection storage against local Postgres (sync psycopg)."""
 
@@ -243,6 +248,143 @@ class PgStorage:
                 FROM scrum_agent.issue_snapshots
                 WHERE deleted_at IS NULL
                 """
+            )
+            return cur.fetchall()
+
+    # -- retrieval chunks (Week 10) ------------------------------------------
+
+    def chunk_signatures(self) -> dict[str, tuple[datetime | None, str]]:
+        """issue_id -> (source revision, embedding model) of indexed chunks."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT issue_id, source_updated, embedding_model
+                FROM scrum_agent.issue_chunks
+                """
+            )
+            return {row["issue_id"]: (row["source_updated"], row["embedding_model"]) for row in cur}
+
+    def replace_chunks(
+        self,
+        *,
+        issue_id: str,
+        issue_key: str,
+        site: str,
+        project_key: str,
+        source_updated: datetime | None,
+        rows: list[tuple],
+        embedding_model: str,
+    ) -> None:
+        """Atomically replace one issue's chunks.
+
+        rows: (chunk_kind, chunk_index, heading, content, content_hash,
+        embedding) — the delete+insert runs in one transaction, so a search
+        never observes an issue with no chunks.
+        """
+        with self._conn.transaction(), self._conn.cursor() as cur:
+            cur.execute("DELETE FROM scrum_agent.issue_chunks WHERE issue_id = %s", (issue_id,))
+            cur.executemany(
+                """
+                INSERT INTO scrum_agent.issue_chunks
+                    (issue_id, issue_key, site, project_key, chunk_kind, chunk_index,
+                     heading, content, content_hash, source_updated, source_url,
+                     embedding, embedding_model)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector, %s)
+                """,
+                [
+                    (
+                        issue_id,
+                        issue_key,
+                        site,
+                        project_key,
+                        kind,
+                        index,
+                        heading,
+                        content,
+                        content_hash,
+                        source_updated,
+                        f"https://{site}/browse/{issue_key}",
+                        _vector_literal(embedding),
+                        embedding_model,
+                    )
+                    for kind, index, heading, content, content_hash, embedding in rows
+                ],
+            )
+
+    def prune_orphan_chunks(self) -> None:
+        """Drop chunks of tombstoned snapshots (issue gone or access lost)."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM scrum_agent.issue_chunks c
+                USING scrum_agent.issue_snapshots s
+                WHERE c.issue_id = s.issue_id AND s.deleted_at IS NOT NULL
+                """
+            )
+
+    def delete_chunks(self, *, issue_key: str) -> None:
+        """Invalidate an issue's chunks after a failed live recheck."""
+        with self._conn.cursor() as cur:
+            cur.execute("DELETE FROM scrum_agent.issue_chunks WHERE issue_key = %s", (issue_key,))
+
+    def hybrid_search(
+        self,
+        *,
+        query: str,
+        query_embedding: list[float],
+        embedding_model: str,
+        limit: int,
+    ) -> list[dict]:
+        """Fuse ranked vector and full-text candidates (RRF, k=60), then keep
+        the best chunk per issue and return the top ``limit`` issues."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH vec AS (
+                    SELECT id, row_number() OVER (ORDER BY embedding <=> %s::vector) AS rn
+                    FROM scrum_agent.issue_chunks
+                    WHERE embedding_model = %s
+                ),
+                txt AS (
+                    SELECT c.id, row_number() OVER (
+                               ORDER BY ts_rank(c.content_tsv, q.tsq) DESC
+                           ) AS rn
+                    FROM scrum_agent.issue_chunks c,
+                         websearch_to_tsquery('english', %s) AS q(tsq)
+                    WHERE q.tsq @@ c.content_tsv
+                ),
+                fused AS (
+                    SELECT c.issue_key, c.chunk_kind, c.heading, c.content,
+                           c.source_updated, c.source_url, s.summary AS title,
+                           1 - (c.embedding <=> %s::vector) AS similarity,
+                           coalesce(1.0 / (60 + vec.rn), 0)
+                               + coalesce(1.0 / (60 + txt.rn), 0) AS score
+                    FROM scrum_agent.issue_chunks c
+                    JOIN scrum_agent.issue_snapshots s
+                      ON s.issue_id = c.issue_id AND s.deleted_at IS NULL
+                    LEFT JOIN vec ON vec.id = c.id
+                    LEFT JOIN txt ON txt.id = c.id
+                    WHERE vec.id IS NOT NULL OR txt.id IS NOT NULL
+                )
+                SELECT issue_key, chunk_kind, heading, content, source_updated,
+                       source_url, title, similarity, score
+                FROM (
+                    SELECT DISTINCT ON (issue_key) *
+                    FROM fused
+                    ORDER BY issue_key, score DESC
+                ) best
+                ORDER BY score DESC
+                LIMIT %s
+                """,
+                # Placeholder order: vec.embedding, vec.model, txt.query,
+                # fused.embedding (similarity), limit.
+                (
+                    _vector_literal(query_embedding),
+                    embedding_model,
+                    query,
+                    _vector_literal(query_embedding),
+                    limit,
+                ),
             )
             return cur.fetchall()
 

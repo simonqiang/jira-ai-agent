@@ -22,6 +22,7 @@ class InMemoryStorage:
         self.board_configs: list[dict] = []
         self.checkpoints: dict[str, dict] = {}
         self.report_jobs: dict[int, dict] = {}
+        self.chunks: dict[tuple[str, str, int], dict] = {}  # (issue_id, kind, index)
 
     # -- collection runs ---------------------------------------------------
 
@@ -264,3 +265,112 @@ class InMemoryStorage:
 
     def get_report_job(self, job_id: int) -> dict | None:
         return self.report_jobs.get(job_id)
+
+    # -- retrieval chunks (Week 10; mirrors the PgStorage SQL semantics) ------
+
+    def chunk_signatures(self) -> dict[str, tuple[datetime | None, str]]:
+        return {
+            chunk["issue_id"]: (chunk["source_updated"], chunk["embedding_model"])
+            for chunk in self.chunks.values()
+        }
+
+    def replace_chunks(
+        self,
+        *,
+        issue_id: str,
+        issue_key: str,
+        site: str,
+        project_key: str,
+        source_updated: datetime | None,
+        rows: list[tuple],
+        embedding_model: str,
+    ) -> None:
+        self.chunks = {
+            key: chunk for key, chunk in self.chunks.items() if chunk["issue_id"] != issue_id
+        }
+        for kind, index, heading, content, content_hash, embedding in rows:
+            self.chunks[(issue_id, kind, index)] = {
+                "issue_id": issue_id,
+                "issue_key": issue_key,
+                "site": site,
+                "project_key": project_key,
+                "chunk_kind": kind,
+                "chunk_index": index,
+                "heading": heading,
+                "content": content,
+                "content_hash": content_hash,
+                "source_updated": source_updated,
+                "source_url": f"https://{site}/browse/{issue_key}",
+                "embedding": embedding,
+                "embedding_model": embedding_model,
+                "indexed_at": self._now(),
+            }
+
+    def prune_orphan_chunks(self) -> None:
+        tombstoned = {s["issue_id"] for s in self.snapshots.values() if s["deleted_at"]}
+        self.chunks = {
+            key: chunk for key, chunk in self.chunks.items() if chunk["issue_id"] not in tombstoned
+        }
+
+    def delete_chunks(self, *, issue_key: str) -> None:
+        self.chunks = {key: c for key, c in self.chunks.items() if c["issue_key"] != issue_key}
+
+    def hybrid_search(
+        self,
+        *,
+        query: str,
+        query_embedding: list[float],
+        embedding_model: str,
+        limit: int,
+    ) -> list[dict]:
+        live_keys = {
+            s["issue_id"]: s["summary"] for s in self.snapshots.values() if not s["deleted_at"]
+        }
+        candidates = [c for c in self.chunks.values() if c["embedding_model"] == embedding_model]
+        terms = [t.casefold() for t in query.split()]
+        by_rank: dict[int, list[float]] = {}
+
+        def fuse(ranking: list[int]) -> None:
+            for position, chunk_id in enumerate(ranking):
+                by_rank.setdefault(chunk_id, []).append(1.0 / (60 + position + 1))
+
+        vector_hits = sorted(
+            (c for c in candidates if c["issue_id"] in live_keys),
+            key=lambda c: _cosine(query_embedding, c["embedding"]),
+            reverse=True,
+        )
+        fuse([id(c) for c in vector_hits])
+        text_hits = [
+            c
+            for c in candidates
+            if all(term in f"{c['heading'] or ''} {c['content']}".casefold() for term in terms)
+        ]
+        fuse([id(c) for c in text_hits])
+        best: dict[int, dict] = {}
+        for chunk_id, ranks in by_rank.items():
+            chunk = next(c for c in candidates if id(c) == chunk_id)
+            score = sum(ranks)
+            similarity = _cosine(query_embedding, chunk["embedding"])
+            if chunk["issue_id"] not in live_keys:
+                continue
+            if chunk["issue_id"] not in best or score > best[chunk["issue_id"]]["score"]:
+                best[chunk["issue_id"]] = {
+                    "issue_key": chunk["issue_key"],
+                    "chunk_kind": chunk["chunk_kind"],
+                    "heading": chunk["heading"],
+                    "content": chunk["content"],
+                    "source_updated": chunk["source_updated"],
+                    "source_url": chunk["source_url"],
+                    "title": live_keys[chunk["issue_id"]],
+                    "similarity": similarity,
+                    "score": score,
+                }
+        return sorted(best.values(), key=lambda row: row["score"], reverse=True)[:limit]
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    norm = (sum(x * x for x in a) * sum(y * y for y in b)) ** 0.5
+    return dot / norm if norm else 0.0
