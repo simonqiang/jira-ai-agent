@@ -351,7 +351,7 @@ class PgStorage:
                            ) AS rn
                     FROM scrum_agent.issue_chunks c,
                          websearch_to_tsquery('english', %s) AS q(tsq)
-                    WHERE q.tsq @@ c.content_tsv
+                    WHERE q.tsq @@ c.content_tsv AND c.embedding_model = %s
                 ),
                 fused AS (
                     SELECT c.issue_key, c.chunk_kind, c.heading, c.content,
@@ -377,11 +377,12 @@ class PgStorage:
                 LIMIT %s
                 """,
                 # Placeholder order: vec.embedding, vec.model, txt.query,
-                # fused.embedding (similarity), limit.
+                # txt.model, fused.embedding (similarity), limit.
                 (
                     _vector_literal(query_embedding),
                     embedding_model,
                     query,
+                    embedding_model,
                     _vector_literal(query_embedding),
                     limit,
                 ),

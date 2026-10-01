@@ -360,6 +360,16 @@ def test_retrieval_migration_matches_schema_contract() -> None:
     assert "ivfflat" not in sql and "hnsw" not in sql
 
 
+def test_hybrid_search_keeps_full_text_candidates_in_the_query_vector_space() -> None:
+    """A full-text match from another model must never reach cosine similarity."""
+    import inspect
+
+    from scrum_agent.storage.repository import PgStorage
+
+    source = inspect.getsource(PgStorage.hybrid_search)
+    assert "WHERE q.tsq @@ c.content_tsv AND c.embedding_model = %s" in source
+
+
 @requires_db
 def test_retrieval_chunks_round_trip() -> None:
     import psycopg
