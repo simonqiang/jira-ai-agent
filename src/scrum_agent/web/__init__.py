@@ -124,12 +124,15 @@ def create_app(settings: Settings, chat: ChatService, jobs=None) -> FastAPI:
 
     conversations: dict[str, list[TurnView]] = {}
     tickets = None
+    updates = None
     if jobs is not None:
         from scrum_agent.ticketing.approvals import TicketApprovalService
+        from scrum_agent.ticketing.updates import TicketUpdateService
 
         tickets = TicketApprovalService(
             jobs.storage(), chat.jira_client, project_key=settings.jira_project_key
         )
+        updates = TicketUpdateService(jobs.storage(), chat.jira_client)
 
     def approver(request: Request) -> str:
         user = request.session.get("approval_user")
@@ -258,6 +261,57 @@ def create_app(settings: Settings, chat: ChatService, jobs=None) -> FastAPI:
         try:
             result = tickets.execute(approval_id, approver=approver(request))
             return JSONResponse(result, status_code=200 if result["status"] == "succeeded" else 202)
+        except PermissionError:
+            return PlainTextResponse("Approval session is not authenticated.", status_code=403)
+        except ValueError as exc:
+            return PlainTextResponse(str(exc), status_code=400)
+
+    # -- reviewed ticket updates (Week 9) ----------------------------------------
+
+    @app.post("/tickets/updates")
+    async def propose_ticket_update(request: Request) -> Response:
+        if updates is None:
+            return PlainTextResponse("Ticket updates need the local database.", status_code=409)
+        try:
+            body = await request.json()
+            issue_key = body.get("issue_key") if isinstance(body, dict) else None
+            changes = body.get("changes") if isinstance(body, dict) else None
+            if not isinstance(issue_key, str) or not issue_key.strip():
+                raise ValueError("issue_key must be a Jira issue key such as PAY-3")
+            if not isinstance(changes, dict) or not changes:
+                raise ValueError("changes must be a non-empty mapping of field to new value")
+            if len(changes) > 32 or any(
+                not isinstance(key, str) or (isinstance(value, str) and len(value) > 10_000)
+                for key, value in changes.items()
+            ):
+                raise ValueError("Too many or too-large update fields")
+            return JSONResponse(
+                updates.propose_update(issue_key, changes, creator=approver(request))
+            )
+        except PermissionError:
+            return PlainTextResponse("Approval session is not authenticated.", status_code=403)
+        except ValueError as exc:
+            return PlainTextResponse(str(exc), status_code=400)
+
+    @app.post("/tickets/update-proposals/{proposal_id}/approve")
+    async def approve_ticket_update(request: Request, proposal_id: int) -> Response:
+        if updates is None:
+            return PlainTextResponse("Ticket updates need the local database.", status_code=409)
+        try:
+            return JSONResponse(updates.approve_update(proposal_id, approver=approver(request)))
+        except PermissionError:
+            return PlainTextResponse("Approval session is not authenticated.", status_code=403)
+        except ValueError as exc:
+            return PlainTextResponse(str(exc), status_code=400)
+
+    @app.post("/tickets/update-approvals/{approval_id}/execute")
+    async def execute_ticket_update(request: Request, approval_id: int) -> Response:
+        if updates is None:
+            return PlainTextResponse("Ticket updates need the local database.", status_code=409)
+        try:
+            result = updates.execute_update(approval_id, approver=approver(request))
+            code = {"succeeded": 200, "rejected_stale": 409}.get(result["status"], 502)
+            return JSONResponse(result, status_code=code)
         except PermissionError:
             return PlainTextResponse("Approval session is not authenticated.", status_code=403)
         except ValueError as exc:

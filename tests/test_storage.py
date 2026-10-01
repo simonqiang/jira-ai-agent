@@ -245,3 +245,92 @@ def test_ticket_approval_records_round_trip() -> None:
             status="executing",
             started_at=moment,
         )
+
+
+def test_ticket_updates_migration_matches_schema_contract() -> None:
+    sql = (
+        resources.files("scrum_agent")
+        .joinpath("migrations")
+        .joinpath("004_ticket_updates.sql")
+        .read_text()
+    )
+    for table in (
+        "scrum_agent.ticket_update_proposals",
+        "scrum_agent.ticket_update_approvals",
+        "scrum_agent.ticket_update_executions",
+    ):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
+    assert "CHECK (jsonb_typeof(base) = 'object')" in sql
+    assert "CHECK (expires_at > approved_at)" in sql
+    assert "UNIQUE REFERENCES scrum_agent.ticket_update_approvals" in sql
+    assert "rejected_stale" in sql and "verification_failed" in sql
+
+
+@requires_db
+def test_ticket_update_records_round_trip() -> None:
+    import psycopg
+    from psycopg.rows import dict_row
+
+    from scrum_agent.storage.db import run_migrations
+    from scrum_agent.storage.repository import PgStorage
+
+    conn = psycopg.connect(
+        _TEST_DSN, row_factory=dict_row, options="-c timezone=UTC", autocommit=True
+    )
+    with conn.cursor() as cur:
+        cur.execute("DROP SCHEMA IF EXISTS scrum_agent CASCADE")
+        cur.execute("DROP TABLE IF EXISTS public.schema_migrations")
+    assert "004_ticket_updates.sql" in run_migrations(conn)
+
+    storage = PgStorage(conn)
+    moment = datetime(2026, 10, 2, tzinfo=UTC)
+    proposal_id = storage.create_update_proposal(
+        creator="local-pilot",
+        issue_key="PAY-3",
+        base={"acceptance_criteria": None},
+        changes={"acceptance_criteria": "Given, When, Then."},
+        payload_hash="hash-9",
+        created_at=moment,
+    )
+    proposal = storage.get_update_proposal(proposal_id)
+    assert proposal["base"] == {"acceptance_criteria": None}  # jsonb round-trips as a dict
+    assert proposal["changes"]["acceptance_criteria"].startswith("Given")
+
+    approval_id = storage.create_update_approval(
+        proposal_id=proposal_id,
+        approver="local-pilot",
+        payload_hash="hash-9",
+        approved_at=moment,
+        expires_at=moment + timedelta(minutes=15),
+    )
+    assert storage.get_update_approval(approval_id)["payload_hash"] == "hash-9"
+
+    execution_id = storage.create_update_execution(
+        approval_id=approval_id,
+        payload_hash="hash-9",
+        issue_key="PAY-3",
+        status="executing",
+        requested={"acceptance_criteria": "Given, When, Then."},
+        started_at=moment,
+    )
+    assert storage.get_update_execution_by_approval(approval_id)["status"] == "executing"
+    storage.finish_update_execution(
+        execution_id,
+        status="succeeded",
+        verified={"acceptance_criteria": {"match": True}},
+        finished_at=moment,
+    )
+    done = storage.get_update_execution_by_approval(approval_id)
+    assert done["status"] == "succeeded"
+    assert done["verified"]["acceptance_criteria"]["match"] is True
+
+    # One execution per approval: a stale diff can never re-execute later.
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        storage.create_update_execution(
+            approval_id=approval_id,
+            payload_hash="hash-9",
+            issue_key="PAY-3",
+            status="executing",
+            requested={},
+            started_at=moment,
+        )

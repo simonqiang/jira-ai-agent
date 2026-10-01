@@ -197,12 +197,12 @@ These are future paths to guide implementation; this planning task does not crea
 
 **Weekly goal:** “I can review and apply a precise change to an existing ticket.”
 
-- [ ] Fetch current issue content and generate a field-level diff that preserves unrelated fields and description sections.
-- [ ] Extend the approval/execution flow to issue updates; re-read relevant fields before writing and reject a stale proposal.
-- [ ] Check concurrent edits, partial failures, unrelated-field preservation and post-write verification. Document the remaining external-edit race where Jira provides no atomic precondition.
-- [ ] Provide clear outcomes and an audit trail of requested and verified changes.
+- [x] Fetch current issue content and generate a field-level diff that preserves unrelated fields and description sections. *(`ticketing/updates.py:propose_update` diffs requested values against a live scoped read; only changed fields enter the proposal, unknown/no-op/malformed requests are rejected, and only reviewed fields are ever PUT — unrelated fields and untouched description sections cannot be part of the payload.)*
+- [x] Extend the approval/execution flow to issue updates; re-read relevant fields before writing and reject a stale proposal. *(`004_ticket_updates.sql` + `TicketUpdateService` mirror the Week 8 hash-pinned 15-minute approval; execute re-reads the issue and returns `rejected_stale` with per-field conflicts when any reviewed field drifted — the stale approval can never execute later.)*
+- [x] Check concurrent edits, partial failures, unrelated-field preservation and post-write verification. Document the remaining external-edit race where Jira provides no atomic precondition. *(Tests cover an unrelated concurrent edit proceeding and preserved, write errors reconciled by read-back, and non-sticking writes refusing to claim success (`verification_failed`/`failed`). The re-read→PUT overwrite race is documented in the module docstring and README — Jira Cloud offers no If-Match precondition.)*
+- [x] Provide clear outcomes and an audit trail of requested and verified changes. *(`ticket_update_executions` stores status, requested changes and the verified per-field outcome; execute returns `succeeded`/`rejected_stale`/`verification_failed`/`failed` with `reconciled` flagged when a lost response is confirmed by read-back.)*
 
-**Friday demo:** Add acceptance criteria to a sandbox ticket, then demonstrate that an intervening edit causes a conflict instead of silent overwrite.
+**Friday demo:** Add acceptance criteria to a sandbox ticket, then demonstrate that an intervening edit causes a conflict instead of silent overwrite. *(Implemented and regression-tested; the live sandbox walkthrough remains for the pilot user — see the [Week 9 note](notes/2026-10-02-week-9.md).)*
 
 **Done when:** Only reviewed changes are applied; stale diffs cannot execute; failures do not claim success.
 

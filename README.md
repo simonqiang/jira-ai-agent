@@ -6,14 +6,16 @@ sprint reports and preparing clear Jira tickets. Design and weekly roadmap:
 - [Product requirements and architecture](docs/superpowers/specs/2026-09-27-scrum-master-agent-design.md)
 - [Weekly implementation roadmap](docs/superpowers/plans/2026-09-27-weekly-delivery-roadmap.md)
 
-Status: **Week 7 — drafting tickets from team-standard templates**. Week 1's
+Status: **Week 9 — reviewed updates to existing tickets**. Week 1's
 live issue and board reads work for board 23031; Week 2 adds sprint selection, typed
 filters, centralized pilot-scope checks and a checked query set; Week 3 ships the
 local read-only ADK chat. Week 4 stores issue snapshots, changelog events, board
 configuration versions and collection checkpoints in a local PostgreSQL database;
 Week 5-6 compute current-sprint and evidence-backed historical sprint reports.
 Week 7 adds versioned Story/Bug/Task templates and editable draft generation that
-never invents content — see the [Week 6 note](docs/superpowers/notes/2026-10-01-week-6.md)
+never invents content; Week 8 creates tickets from exact-payload approvals;
+Week 9 applies reviewed field-level updates without clobbering concurrent
+edits — see the [Week 6 note](docs/superpowers/notes/2026-10-01-week-6.md)
 and the [Week 3 note](docs/superpowers/notes/2026-09-29-week-3.md).
 
 The intended runtime is a **local PC application**. Google Cloud deployment, public
@@ -269,6 +271,31 @@ criteria) or `advisory` (an optional writing suggestion).
 
 Creating the ticket in Jira after approval is Week 8; similar-ticket
 suggestions during drafting are Week 11.
+
+### Reviewed updates (Week 9)
+
+Approved writes live behind the local API (loopback only, approval session
+required), never in the chat loop:
+
+- `POST /tickets/drafts` → `POST /tickets/drafts/{id}/approve` →
+  `POST /tickets/approvals/{id}/execute` creates exactly the approved payload
+  once, reconciled by correlation marker if the response is lost.
+- `POST /tickets/updates` diffs requested field values against the live issue
+  and freezes the diff; `POST /tickets/update-proposals/{id}/approve` and
+  `POST /tickets/update-approvals/{id}/execute` apply it.
+
+Update safety: only the reviewed fields are sent to Jira, so unrelated fields
+and untouched description sections always survive. Before writing, the issue is
+re-read and the update is rejected (`rejected_stale`, HTTP 409) if any reviewed
+field changed since the diff was approved; after writing, every field is
+verified against the request and the outcome (`succeeded`,
+`verification_failed`, `failed`) is recorded with the requested and verified
+values in `scrum_agent.ticket_update_executions`. Approvals expire after 15
+minutes, edits to the proposal void the approval, and a second execute call
+returns the recorded outcome. Known limit: Jira Cloud has no atomic
+precondition on issue updates, so an external edit landing between the
+pre-write re-read and the PUT could still be overwritten — the window is
+seconds and both edits remain visible in the Jira changelog.
 
 The web UI adds `/reports`: pick a sprint, watch the job, view the report
 (HTML-escaped) and download the same authorized result as Markdown or CSV. In

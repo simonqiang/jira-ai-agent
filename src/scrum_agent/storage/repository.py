@@ -370,6 +370,122 @@ class PgStorage:
                 (status, issue_key, reconciled, finished_at, execution_id),
             )
 
+    # -- reviewed issue updates (Week 9) ---------------------------------------
+
+    def create_update_proposal(
+        self,
+        *,
+        creator: str,
+        issue_key: str,
+        base: dict,
+        changes: dict,
+        payload_hash: str,
+        created_at: datetime,
+    ) -> int:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO scrum_agent.ticket_update_proposals
+                    (creator, issue_key, base, changes, payload_hash, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+                """,
+                (
+                    creator,
+                    issue_key,
+                    json.dumps(base),
+                    json.dumps(changes),
+                    payload_hash,
+                    created_at,
+                ),
+            )
+            return int(cur.fetchone()["id"])
+
+    def get_update_proposal(self, proposal_id: int) -> dict | None:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM scrum_agent.ticket_update_proposals WHERE id = %s", (proposal_id,)
+            )
+            return cur.fetchone()
+
+    def create_update_approval(
+        self,
+        *,
+        proposal_id: int,
+        approver: str,
+        payload_hash: str,
+        approved_at: datetime,
+        expires_at: datetime,
+    ) -> int:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO scrum_agent.ticket_update_approvals
+                    (proposal_id, approver, payload_hash, approved_at, expires_at)
+                VALUES (%s, %s, %s, %s, %s) RETURNING id
+                """,
+                (proposal_id, approver, payload_hash, approved_at, expires_at),
+            )
+            return int(cur.fetchone()["id"])
+
+    def get_update_approval(self, approval_id: int) -> dict | None:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM scrum_agent.ticket_update_approvals WHERE id = %s", (approval_id,)
+            )
+            return cur.fetchone()
+
+    def create_update_execution(
+        self,
+        *,
+        approval_id: int,
+        payload_hash: str,
+        issue_key: str,
+        status: str,
+        requested: dict,
+        started_at: datetime,
+    ) -> int:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO scrum_agent.ticket_update_executions
+                    (approval_id, payload_hash, issue_key, status, requested, started_at)
+                VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+                """,
+                (
+                    approval_id,
+                    payload_hash,
+                    issue_key,
+                    status,
+                    json.dumps(requested),
+                    started_at,
+                ),
+            )
+            return int(cur.fetchone()["id"])
+
+    def get_update_execution_by_approval(self, approval_id: int) -> dict | None:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM scrum_agent.ticket_update_executions
+                WHERE approval_id = %s
+                """,
+                (approval_id,),
+            )
+            return cur.fetchone()
+
+    def finish_update_execution(
+        self, execution_id: int, *, status: str, verified: dict, finished_at: datetime
+    ) -> None:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE scrum_agent.ticket_update_executions
+                SET status = %s, verified = %s, finished_at = %s
+                WHERE id = %s
+                """,
+                (status, json.dumps(verified), finished_at, execution_id),
+            )
+
     # -- report jobs (Week 5) --------------------------------------------------
 
     def submit_report_job(

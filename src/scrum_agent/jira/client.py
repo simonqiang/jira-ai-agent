@@ -248,6 +248,14 @@ class JiraClient:
             return None
         return {"id": matches[0].id, "key": matches[0].key}
 
+    def update_issue(self, issue_key: str, fields: dict) -> None:
+        """Apply exactly the given field set to one issue; no other field moves."""
+        self._check_issue_scope(issue_key)
+        # Jira answers a field update with 204 No Content; anything else is a bug.
+        payload = self._request("PUT", f"/rest/api/3/issue/{issue_key}", json={"fields": fields})
+        if payload != {}:
+            raise JiraApiError("Jira update returned an unexpected response body")
+
     def get_board(self, board_id: int) -> Board:
         self._check_board_scope(board_id)
         return self._parse_response(

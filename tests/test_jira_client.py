@@ -845,3 +845,32 @@ def test_find_by_marker_refuses_ambiguous_matches() -> None:
     marker = "scrum-agent-req-00000000-0000-0000-0000-000000000000"
     with pytest.raises(JiraApiError, match="multiple issues"):
         make_client(handler)[0].find_by_marker(marker)
+
+
+def test_update_issue_puts_exact_fields_and_accepts_empty_response() -> None:
+    fields = {"customfield_10350": "Given, When, Then."}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "PUT"
+        assert request.url.path == "/rest/api/3/issue/PAY-3"
+        assert json.loads(request.content) == {"fields": fields}
+        return httpx.Response(204)
+
+    client, requests = make_client(handler)
+    client.update_issue("PAY-3", fields)
+    assert len(requests) == 1
+
+
+def test_update_issue_rejects_unexpected_response_body() -> None:
+    with pytest.raises(JiraApiError, match="unexpected response body"):
+        make_client(lambda request: ok({"ignored": True}))[0].update_issue(
+            "PAY-3", {"summary": "x"}
+        )
+
+
+def test_update_issue_refuses_out_of_scope_key_before_http() -> None:
+    client, requests = make_client(lambda request: httpx.Response(204))
+
+    with pytest.raises(JiraPermissionError):
+        client.update_issue("OTHER-1", {"summary": "x"})
+    assert requests == []

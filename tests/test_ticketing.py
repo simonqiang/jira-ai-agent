@@ -10,6 +10,7 @@ import pytest
 class MemoryStorage:
     def __init__(self) -> None:
         self.drafts: dict[int, dict] = {}
+        self.proposals: dict[int, dict] = {}
         self.approvals: dict[int, dict] = {}
         self.executions: dict[int, dict] = {}
         self._next_id = 1
@@ -50,6 +51,49 @@ class MemoryStorage:
 
     def update_execution(self, execution_id: int, **changes: object) -> None:
         self.executions[execution_id].update(changes)
+
+    # -- Week 9 reviewed updates (used by the web fixture too) ------------------
+
+    def create_update_proposal(self, **row: object) -> int:
+        proposal_id = self._next_id
+        self._next_id += 1
+        self.proposals[proposal_id] = {"id": proposal_id, **row}
+        return proposal_id
+
+    def get_update_proposal(self, proposal_id: int) -> dict | None:
+        return self.proposals.get(proposal_id)
+
+    def create_update_approval(self, **row: object) -> int:
+        approval_id = self._next_id
+        self._next_id += 1
+        self.approvals[approval_id] = {"id": approval_id, **row}
+        return approval_id
+
+    def get_update_approval(self, approval_id: int) -> dict | None:
+        return self.approvals.get(approval_id)
+
+    def create_update_execution(self, **row: object) -> int:
+        execution_id = self._next_id
+        self._next_id += 1
+        self.executions[execution_id] = {"id": execution_id, **row}
+        return execution_id
+
+    def get_update_execution_by_approval(self, approval_id: int) -> dict | None:
+        return next(
+            (
+                execution
+                for execution in self.executions.values()
+                if execution["approval_id"] == approval_id
+            ),
+            None,
+        )
+
+    def finish_update_execution(
+        self, execution_id: int, *, status: str, verified: dict, finished_at: datetime
+    ) -> None:
+        self.executions[execution_id].update(
+            status=status, verified=verified, finished_at=finished_at
+        )
 
 
 class FakeJira:
