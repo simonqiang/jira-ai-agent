@@ -412,3 +412,127 @@ def test_create_ticket_draft_rejects_bad_bodies() -> None:
         ).status_code
         == 400
     )
+
+
+# -- reviewed ticket updates (Week 9) -----------------------------------------------
+
+
+class UpdateJira(FakeJira):
+    """Fixture Jira plus the issue-update route; reads see every applied write."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.update_calls: list[tuple[str, dict]] = []
+        self.applied: dict[str, dict] = {}  # key -> fields a write set
+        self.fail_put = False
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "PUT" and path.startswith("/rest/api/3/issue/"):
+            key = path.rsplit("/", 1)[-1]
+            fields = json.loads(request.content)["fields"]
+            self.update_calls.append((key, fields))
+            if self.fail_put:
+                return httpx.Response(500)
+            self.applied.setdefault(key, {}).update(fields)
+            return httpx.Response(204)
+        response = super().handler(request)
+        if request.method == "GET" and path.startswith("/rest/api/3/issue/"):
+            applied = self.applied.get(path.rsplit("/", 1)[-1])
+            if applied:
+                body = json.loads(response.content)
+                body["fields"] = {**body["fields"], **applied}
+                response = httpx.Response(200, json=body)
+        return response
+
+
+def make_update_app():
+    from tests.test_ticketing import MemoryStorage
+
+    jira = UpdateJira()
+    chat, _, _ = make_chat(jira=jira)
+    storage = MemoryStorage()
+    app = create_app(make_settings(), chat, FakeTicketJobs(storage))
+    return app, storage, jira
+
+
+def test_reviewed_update_flow_applies_once_and_verifies() -> None:
+    app, storage, jira = make_update_app()
+    client = client_for(app)
+    client.get("/")  # establish the approval session
+    criteria = "Given a statement, When I export, Then a CSV downloads."
+
+    proposal = client.post(
+        "/tickets/updates",
+        json={"issue_key": "PAY-3", "changes": {"acceptance_criteria": criteria}},
+    )
+    assert proposal.status_code == 200
+    body = proposal.json()
+    assert body["issue_key"] == "PAY-3"
+    assert body["diff"] == {"acceptance_criteria": {"old": None, "new": criteria}}
+
+    approval = client.post(f"/tickets/update-proposals/{body['id']}/approve")
+    assert approval.status_code == 200
+
+    executed = client.post(f"/tickets/update-approvals/{approval.json()['id']}/execute")
+    assert executed.status_code == 200
+    assert executed.json()["status"] == "succeeded"
+    assert jira.update_calls == [("PAY-3", {"customfield_10350": criteria})]
+    execution = storage.executions[executed.json()["execution_id"]]
+    assert execution["status"] == "succeeded"
+    assert execution["requested"] == {"acceptance_criteria": criteria}
+    assert execution["verified"]["acceptance_criteria"]["match"] is True
+
+    again = client.post(f"/tickets/update-approvals/{approval.json()['id']}/execute")
+    assert again.json() == executed.json()
+    assert len(jira.update_calls) == 1  # duplicate click wrote nothing
+
+
+def test_update_flow_conflicts_on_intervening_edit_instead_of_overwriting() -> None:
+    app, storage, jira = make_update_app()
+    client = client_for(app)
+    client.get("/")
+    criteria = "Given a statement, When I export, Then a CSV downloads."
+    proposal = client.post(
+        "/tickets/updates",
+        json={"issue_key": "PAY-3", "changes": {"acceptance_criteria": criteria}},
+    )
+    approval = client.post(f"/tickets/update-proposals/{proposal.json()['id']}/approve")
+
+    # Someone else edits the same field between approval and execution.
+    jira.applied["PAY-3"] = {"customfield_10350": "Criteria someone else wrote first"}
+
+    executed = client.post(f"/tickets/update-approvals/{approval.json()['id']}/execute")
+    assert executed.status_code == 409
+    assert executed.json()["status"] == "rejected_stale"
+    assert jira.update_calls == []  # no silent overwrite
+    assert storage.executions[executed.json()["execution_id"]]["status"] == "rejected_stale"
+
+
+def test_update_endpoints_require_session_database_and_valid_fields() -> None:
+    app, *_ = make_update_app()
+    client = client_for(app)  # no visit to "/": no approval session
+    base = "/tickets/updates"
+    body = {"issue_key": "PAY-3", "changes": {"acceptance_criteria": "Given, When, Then."}}
+    assert client.post(base, json=body).status_code == 403
+    assert client.post("/tickets/update-proposals/1/approve").status_code == 403
+    assert client.post("/tickets/update-approvals/1/execute").status_code == 403
+
+    client.get("/")
+    no_db = client_for(make_app()[0])
+    no_db.get("/")
+    assert no_db.post(base, json=body).status_code == 409
+    assert no_db.post("/tickets/update-proposals/1/approve").status_code == 409
+    assert no_db.post("/tickets/update-approvals/1/execute").status_code == 409
+
+    assert client.post(base, json={"issue_key": "", "changes": body["changes"]}).status_code == 400
+    assert client.post(base, json={"issue_key": "PAY-3", "changes": {}}).status_code == 400
+    assert (
+        client.post(base, json={"issue_key": "PAY-3", "changes": {"nope": "x"}}).status_code == 400
+    )
+    assert (
+        client.post(
+            base, json={"issue_key": "PAY-3", "changes": {"summary": "Statement export"}}
+        ).status_code
+        == 400  # no-op: every requested value already matches the issue
+    )
