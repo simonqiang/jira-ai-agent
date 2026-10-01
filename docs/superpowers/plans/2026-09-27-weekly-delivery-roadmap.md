@@ -183,13 +183,13 @@ These are future paths to guide implementation; this planning task does not crea
 
 **Weekly goal:** “I can review a draft and create exactly that ticket in Jira.”
 
-- [ ] Persist drafts, payload hashes, approval identity/expiry and execution records; provide a preview and authenticated approval action.
-- [ ] Revalidate Jira permissions and field metadata before creating one issue; verify the created issue and return its link.
-- [ ] Invalidate approval after draft edits. Check duplicate clicks, expired approval and application restart.
-- [ ] Handle ambiguous create timeouts: write a unique correlation marker (label or description footer) with every create, reconcile by searching for it, and mark the outcome unknown only when the marker cannot be found. Never automatically retry a potentially successful create.
-- [ ] Exercise backup and restore of approval and execution records here, so Week 12 re-verifies rather than discovers.
+- [x] Persist drafts, payload hashes, approval identity/expiry and execution records; provide a preview and authenticated approval action. *(`003_ticket_approvals.sql`: immutable payload jsonb + SHA-256 hash, UNIQUE correlation marker, approval identity and 15-minute expiry; `POST /tickets/drafts` returns the frozen payload as the preview and every endpoint gates on the `approval_user` session.)*
+- [x] Revalidate Jira permissions and field metadata before creating one issue; verify the created issue and return its link. *(`execute` runs live `validate_create_fields` (project pin + createmeta) before `create_issue`, then verifies by `get_issue` read-back and returns the issue key.)*
+- [x] Invalidate approval after draft edits. Check duplicate clicks, expired approval and application restart. *(`execute` re-checks `draft.payload_hash != approval.payload_hash`, prior executions are returned without re-creating (UNIQUE approval_id), expiry raises, and all state is durable Postgres — covered by `tests/test_ticketing.py`, `test_webapp.py` and the gated `test_storage.py` round-trip.)*
+- [x] Handle ambiguous create timeouts: write a unique correlation marker (label or description footer) with every create, reconcile by searching for it, and mark the outcome unknown only when the marker cannot be found. Never automatically retry a potentially successful create. *(Marker goes into the description footer and labels; a failed create reconciles via `find_by_marker` JQL search ⇒ `succeeded/reconciled` or `outcome_unknown`; retries are forbidden by contract and tests.)*
+- [x] Exercise backup and restore of approval and execution records here, so Week 12 re-verifies rather than discovers. *(Drilled 2026-10-02: `pg_dump` of the pilot DB restored cleanly into a scratch database with identical table row counts, and sample draft/approval/execution/update-proposal rows round-tripped bit-for-bit; migrations 003/004 applied to the pilot DB first — see the [Week 8 note](notes/2026-10-01-week-8.md).)*
 
-**Friday demo:** Approve a sandbox draft, create it once and inspect the actual Jira fields and audit record.
+**Friday demo:** Approve a sandbox draft, create it once and inspect the actual Jira fields and audit record. *(Implemented and regression-tested; the live sandbox walkthrough remains for the pilot user — see the [Week 8 note](notes/2026-10-01-week-8.md).)*
 
 **Done when:** Approved payload and created fields agree, the app prevents duplicate submission, and unapproved/edited/expired requests cannot execute.
 
