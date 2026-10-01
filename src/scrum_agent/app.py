@@ -113,6 +113,20 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="seconds to wait for the worker to finish the job (default: 60)",
     )
 
+    subparsers.add_parser(
+        "reindex",
+        help="chunk and embed collected snapshots into the semantic index (Week 10)",
+    )
+
+    related_parser = subparsers.add_parser(
+        "related",
+        help="find related tickets with permission-aware semantic search (Week 10)",
+    )
+    related_parser.add_argument("--query", required=True, help="free-text description")
+    related_parser.add_argument(
+        "--top", type=int, default=5, help="maximum issues to return (default: 5)"
+    )
+
     args = parser.parse_args(argv)
     if args.command is None:
         args.command = "probe"
@@ -288,8 +302,17 @@ def _serve(settings: Settings) -> int:
         except ValueError as error:
             print(f"Configuration error - {error}", file=sys.stderr)
             return 2
+    retrieval = None
+    if settings.database_url is not None and settings.embedding_model is not None:
+        from scrum_agent.retrieval.service import RetrievalService
+
+        try:
+            retrieval = RetrievalService.build(settings)
+        except ValueError as error:
+            print(f"Configuration error - {error}", file=sys.stderr)
+            return 2
     try:
-        chat = ChatService(settings, jobs=jobs)
+        chat = ChatService(settings, jobs=jobs, retrieval=retrieval)
     except ValueError as error:
         print(f"Configuration error - {error}", file=sys.stderr)
         return 2
@@ -403,6 +426,64 @@ def _freshness(settings: Settings) -> int:
     return 0 if report.is_healthy else 1
 
 
+def _reindex(settings: Settings) -> int:
+    """Chunk and embed collected snapshots into the semantic index (Week 10)."""
+    import psycopg
+
+    from scrum_agent.retrieval.embeddings import EmbeddingError
+    from scrum_agent.retrieval.service import RetrievalService
+
+    if not _require_database(settings):
+        return 2
+    try:
+        service = RetrievalService.build(settings)
+    except ValueError as error:
+        print(f"Configuration error - {error}", file=sys.stderr)
+        return 2
+    try:
+        stats = service.reindex()
+    except psycopg.Error as error:
+        print(f"Database error: {error}", file=sys.stderr)
+        return 1
+    except EmbeddingError as error:
+        print(f"Embedding error: {error}", file=sys.stderr)
+        return 1
+    print(
+        f"Indexed {stats['issues_indexed']} issue(s), skipped {stats['issues_skipped']} "
+        f"unchanged; model {stats['embedding_model']}."
+    )
+    return 0
+
+
+def _related(settings: Settings, args: argparse.Namespace) -> int:
+    """Find related tickets with permission-aware semantic search (Week 10)."""
+    from scrum_agent.retrieval.embeddings import EmbeddingError
+    from scrum_agent.retrieval.service import RetrievalService
+
+    try:
+        service = RetrievalService.build(settings)
+        result = service.search(args.query, top_k=args.top)
+    except ValueError as error:
+        print(f"Configuration error - {error}", file=sys.stderr)
+        return 2
+    except EmbeddingError as error:
+        print(f"Embedding error: {error}", file=sys.stderr)
+        return 1
+    print(f"Query: {result.query}")
+    for hit in result.hits:
+        heading = f" — {hit.heading}" if hit.heading else ""
+        print(f"\n{hit.issue_key} [{hit.chunk_kind}{heading}] score={hit.score}")
+        print(f"  {hit.title}")
+        print(f"  {hit.source_url}")
+        snippet = hit.snippet if len(hit.snippet) <= 300 else f"{hit.snippet[:297]}..."
+        print(f"  {snippet}")
+    for item in result.excluded:
+        print(f"\n{item.issue_key}: unavailable ({item.reason}); excluded from the results.")
+    if not result.hits:
+        print("\nNo related tickets found.")
+    return 0
+
+
 def _collect(settings: Settings, args: argparse.Namespace) -> int:
     """Run one idempotent collection cycle, then report freshness."""
     import psycopg
@@ -509,6 +590,10 @@ def main(argv: list[str] | None = None) -> int:
             return _freshness(settings)
         if args.command == "report":
             return _report(settings, args)
+        if args.command == "reindex":
+            return _reindex(settings)
+        if args.command == "related":
+            return _related(settings, args)
         return _probe(settings)
     except AmbiguousSprintError as error:
         print(f"Jira error: {error}", file=sys.stderr)

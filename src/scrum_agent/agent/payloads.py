@@ -22,6 +22,7 @@ from scrum_agent.jira.errors import (
     JiraRateLimitedError,
 )
 from scrum_agent.jira.models import Issue, Sprint
+from scrum_agent.retrieval.models import RetrievalResult
 from scrum_agent.search.errors import AmbiguousSprintError, SearchError, SprintNotFoundError
 from scrum_agent.search.models import SearchResult
 
@@ -136,6 +137,24 @@ def ok_draft_payload(tool: str, draft: dict) -> dict:
         **draft,
         "fetched_at": _now_iso(),
         "sources": [],
+    }
+
+
+def ok_retrieval_payload(tool: str, result: RetrievalResult) -> dict:
+    """Serialize a ``RetrievalResult``: verified hits plus excluded sources.
+
+    Excluded sources are named with their reason so the model can say they
+    exist but are unavailable — it never receives their text.
+    """
+    return {
+        "ok": True,
+        "tool": tool,
+        "query": result.query,
+        "hits": [hit.model_dump() for hit in result.hits],
+        "excluded": [item.model_dump() for item in result.excluded],
+        "jql": result.jql,
+        "fetched_at": result.fetched_at.isoformat(timespec="seconds"),
+        "sources": [{"issue_key": hit.issue_key} for hit in result.hits],
     }
 
 

@@ -5,7 +5,9 @@ Four search tools (``get_issue``, ``list_sprints``, ``search_issues``,
 ``get_report``), which never block the conversation, and the two Week 7
 drafting tools (``list_draft_templates``/``draft_ticket``), which turn
 user-supplied text into an editable Story/Bug/Task draft and never write to
-Jira. Inputs are plain JSON primitives (ADK's argument coercion swallows
+Jira, and the Week 10 retrieval tool (``find_related_tickets``), which returns
+only chunks re-verified against live Jira. Inputs are plain JSON
+primitives (ADK's argument coercion swallows
 ``ValidationError`` for model classes, so ``IssueFilters`` is built inside each
 tool); outputs are structured payloads. No tool accepts raw JQL, credentials
 or any write parameter, and no tool can widen scope: every Jira-backed call
@@ -24,6 +26,7 @@ from scrum_agent.agent.payloads import (
     normalize_states,
     ok_draft_payload,
     ok_issue_payload,
+    ok_retrieval_payload,
     ok_search_payload,
     ok_sprints_payload,
     ok_templates_payload,
@@ -48,8 +51,9 @@ def _text(value: object, name: str) -> str:
     return value.strip()
 
 
-def make_tools(service: SearchService, jobs=None) -> list[FunctionTool]:
-    """Build the read-only tools bound to ``service`` (and report ``jobs``)."""
+def make_tools(service: SearchService, jobs=None, retrieval=None) -> list[FunctionTool]:
+    """Build the read-only tools bound to ``service`` (plus report ``jobs`` and
+    semantic ``retrieval`` when the local database and embedding key exist)."""
 
     def get_issue(issue_key: str) -> dict:
         """Fetch one issue by its exact key (for example PAY-3).
@@ -235,6 +239,32 @@ def make_tools(service: SearchService, jobs=None) -> list[FunctionTool]:
         except Exception as exc:
             return error_payload("draft_ticket", exc)
 
+    def find_related_tickets(query: str, top_k: int | None = None) -> dict:
+        """Find project tickets related to a free-text description.
+
+        Use when the user describes work or a problem without knowing its key;
+        the search matches meaning, so different wording still finds the ticket.
+        Every returned hit was verified against live Jira just now (access and
+        revision); sources listed in 'excluded' are stale or no longer
+        accessible — say they are unavailable, never quote their content.
+        Similarity is a suggestion, never proof of duplication; for exact key
+        lookups or typed filters use the structured search tools instead.
+        """
+        try:
+            if retrieval is None:
+                raise ValueError(
+                    "related-ticket search requires the local database and embedding "
+                    "configuration (SCRUM_AGENT_DATABASE_URL, SCRUM_AGENT_EMBEDDING_MODEL); "
+                    "start the database with `docker compose up -d`"
+                )
+            if top_k is not None and (not isinstance(top_k, int) or not 1 <= top_k <= 20):
+                raise ValueError("top_k must be an integer between 1 and 20")
+            return ok_retrieval_payload(
+                "find_related_tickets", retrieval.search(_text(query, "query"), top_k=top_k or 5)
+            )
+        except Exception as exc:
+            return error_payload("find_related_tickets", exc)
+
     return [
         FunctionTool(func=get_issue),
         FunctionTool(func=list_sprints),
@@ -244,4 +274,5 @@ def make_tools(service: SearchService, jobs=None) -> list[FunctionTool]:
         FunctionTool(func=get_report),
         FunctionTool(func=list_draft_templates),
         FunctionTool(func=draft_ticket),
+        FunctionTool(func=find_related_tickets),
     ]

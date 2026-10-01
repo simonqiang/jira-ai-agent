@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     database_url: str | None = None
     token_expires_on: date | None = None
 
+    # Week 10: semantic retrieval. Optional like the chat model — when unset,
+    # reindex/related keep working through structured search only. The endpoint
+    # is any OpenAI-compatible /embeddings API.
+    embedding_model: str | None = None
+    embedding_api_key: SecretStr | None = None
+    embedding_base_url: str = "https://api.z.ai/api/paas/v4"
+
     LOOPBACK_HOSTS: ClassVar[tuple[str, ...]] = ("127.0.0.1", "::1", "localhost")
 
     @field_validator(
@@ -80,6 +87,8 @@ class Settings(BaseSettings):
         "model_base_url",
         "web_host",
         "database_url",
+        "embedding_model",
+        "embedding_base_url",
         mode="before",
     )
     @classmethod
@@ -130,7 +139,7 @@ class Settings(BaseSettings):
             )
         return value
 
-    @field_validator("model_api_key", "model_name")
+    @field_validator("model_api_key", "model_name", "embedding_api_key", "embedding_model")
     @classmethod
     def _model_optional_not_blank(cls, value: object) -> object:
         if isinstance(value, SecretStr):
@@ -149,6 +158,18 @@ class Settings(BaseSettings):
             raise ValueError("model_base_url must be an https:// URL")
         if parsed.query or parsed.fragment or value.endswith("/"):
             raise ValueError("model_base_url must not carry a query, fragment or trailing slash")
+        return value
+
+    @field_validator("embedding_base_url")
+    @classmethod
+    def _embedding_base_url_is_https(cls, value: str) -> str:
+        parsed = urlparse(value)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ValueError("embedding_base_url must be an https:// URL")
+        if parsed.query or parsed.fragment or value.endswith("/"):
+            raise ValueError(
+                "embedding_base_url must not carry a query, fragment or trailing slash"
+            )
         return value
 
     @field_validator("database_url")
@@ -228,6 +249,32 @@ def require_model_settings(settings: Settings) -> None:
             f"chat features require {' and '.join(missing)} in the environment or .env "
             "(see .env.example)"
         )
+
+
+def require_embedding_settings(settings: Settings) -> tuple[str, str, str]:
+    """Fail fast for retrieval features and return (base_url, api_key, model).
+
+    The embedding key falls back to the chat model key: one z.ai key serves
+    both endpoints, so the pilot usually configures nothing extra.
+    """
+    api_key = settings.embedding_api_key or settings.model_api_key
+    missing = [
+        name
+        for name, value in (
+            ("SCRUM_AGENT_EMBEDDING_MODEL", settings.embedding_model),
+            ("SCRUM_AGENT_EMBEDDING_API_KEY (or MODEL_API_KEY)", api_key),
+        )
+        if value is None
+    ]
+    if missing:
+        raise ValueError(
+            f"retrieval features require {' and '.join(missing)} in the environment or .env"
+        )
+    return (
+        settings.embedding_base_url,
+        api_key.get_secret_value(),
+        settings.embedding_model or "",
+    )
 
 
 def require_database_settings(settings: Settings) -> None:

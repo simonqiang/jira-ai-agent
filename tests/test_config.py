@@ -161,3 +161,47 @@ def test_token_expiry_accepts_iso_date_and_blank() -> None:
 def test_invalid_token_expiry_fails_validation() -> None:
     with pytest.raises(ValidationError):
         make_settings(token_expires_on="not-a-date")
+
+
+# -- Week 10 embedding settings ------------------------------------------------
+
+
+def test_embedding_settings_are_optional_by_default() -> None:
+    settings = make_settings()
+    assert settings.embedding_model is None
+    assert settings.embedding_api_key is None
+    assert settings.embedding_base_url == "https://api.z.ai/api/paas/v4"
+
+
+def test_embedding_base_url_must_be_https_without_trailing_slash() -> None:
+    with pytest.raises(ValidationError):
+        make_settings(embedding_base_url="http://api.example.com")
+    with pytest.raises(ValidationError):
+        make_settings(embedding_base_url="https://api.example.com/")
+    settings = make_settings(embedding_base_url="https://api.example.com/v4")
+    assert settings.embedding_base_url == "https://api.example.com/v4"
+
+
+def test_blank_embedding_values_are_rejected() -> None:
+    with pytest.raises(ValidationError):
+        make_settings(embedding_model="  ")
+    with pytest.raises(ValidationError):
+        make_settings(embedding_api_key="   ")
+
+
+def test_require_embedding_settings_falls_back_to_the_model_key() -> None:
+    from scrum_agent.config import require_embedding_settings
+
+    settings = make_settings(embedding_model="embedding-3", model_api_key="tok-test-123")
+    base_url, api_key, model = require_embedding_settings(settings)
+    assert (base_url, model) == ("https://api.z.ai/api/paas/v4", "embedding-3")
+    assert api_key == "tok-test-123"  # falls back to the chat model key
+
+    with pytest.raises(ValueError, match="EMBEDDING_MODEL"):
+        require_embedding_settings(make_settings())
+
+
+def test_embedding_key_is_never_disclosed_in_repr() -> None:
+    settings = make_settings(embedding_api_key="sk-embedding-secret")
+    assert "sk-embedding-secret" not in repr(settings)
+    assert "sk-embedding-secret" not in str(settings.model_dump())

@@ -314,6 +314,33 @@ are explicitly `partial`/`unavailable` with the missing evidence named; they
 are never inferred from the current snapshot. Subtasks are excluded from point
 totals by default.
 
+### Related-ticket search (Week 10)
+
+Permission-aware semantic search over the collected snapshots, backed by
+pgvector. Chunks follow the Atlassian Document Format structure (one chunk per
+summary plus one per description block, each carrying its nearest heading),
+and every chunk records its content hash, the issue's `updated` revision, its
+source URL and the embedding model — vector spaces are never mixed across
+models.
+
+```bash
+scrum-agent collect            # snapshots are the index's source
+scrum-agent reindex            # chunk + embed changed issues only
+scrum-agent related --query "payment retry keeps failing" --top 5
+```
+
+Retrieval combines metadata-filtered vector search with Postgres full-text
+search (reciprocal-rank fusion, deduplicated to the best chunk per issue) and
+applies a similarity floor so a no-match query abstains instead of surfacing a
+nearest neighbour. Before any text is returned, every candidate is re-checked
+against live Jira with one project-scoped JQL query: sources whose revision
+drifted are reported `stale` and sources Jira no longer returns are reported
+`revoked_or_deleted` — in both cases their chunks are invalidated and their
+text never reaches the model or the output. In chat, the
+`find_related_tickets` tool exposes the same verified results; similarity is a
+suggestion, never proof of duplication. No approximate (IVFFlat/HNSW) index is
+built until a benchmark justifies one.
+
 ## Layout
 
 ```
