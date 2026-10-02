@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from scrum_agent.pilot import format_checks, preflight
+import logging
+
+from scrum_agent.pilot import configure_local_file_logging, format_checks, preflight
 from tests.conftest import make_settings
 
 
@@ -48,3 +50,17 @@ def test_preflight_never_discloses_database_credentials() -> None:
     rendered = format_checks(checks)
     assert "password" not in rendered
     assert "postgresql://" not in rendered
+
+
+def test_optional_file_logging_is_rotating_and_idempotent(tmp_path) -> None:
+    settings = make_settings(log_directory=str(tmp_path), log_max_bytes=10_000, log_backup_count=2)
+    logger = logging.getLogger("scrum_agent")
+    before = len(logger.handlers)
+
+    configure_local_file_logging(settings)
+    configure_local_file_logging(settings)
+    logger.warning("safe test message")
+
+    content = (tmp_path / "scrum-agent.log").read_text(encoding="utf-8")
+    assert content.endswith("safe test message\n")
+    assert len(logger.handlers) == before + 1

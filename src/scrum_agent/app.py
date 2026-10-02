@@ -586,6 +586,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {location or '(root)'}: {problem['msg']}", file=sys.stderr)
         print("See .env.example for the expected variables.", file=sys.stderr)
         return 2
+    from scrum_agent.pilot import configure_local_file_logging
+
+    configure_local_file_logging(settings)
     try:
         if args.command == "sprints":
             return _sprints(settings, args)

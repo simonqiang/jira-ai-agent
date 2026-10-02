@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from scrum_agent.config import Settings, require_embedding_settings, require_model_settings
 
@@ -62,3 +65,23 @@ def format_checks(checks: tuple[ReadinessCheck, ...]) -> str:
             status = "OK" if check.ok else "FAIL"
             lines.append(f"{status} {check.name}: {check.detail}")
     return "\n".join(lines)
+
+
+def configure_local_file_logging(settings: Settings) -> None:
+    """Add one optional rotating local log handler without changing stderr logging."""
+    if not settings.log_directory:
+        return
+    logger = logging.getLogger("scrum_agent")
+    if any(getattr(handler, "_scrum_agent_pilot_log", False) for handler in logger.handlers):
+        return
+    directory = Path(settings.log_directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(
+        directory / "scrum-agent.log",
+        maxBytes=settings.log_max_bytes,
+        backupCount=settings.log_backup_count,
+        encoding="utf-8",
+    )
+    handler._scrum_agent_pilot_log = True  # type: ignore[attr-defined]
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logger.addHandler(handler)
