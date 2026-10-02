@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from scrum_agent.jira.client import JiraClient
-from scrum_agent.jira.models import parse_jira_time
+from scrum_agent.jira.models import Issue, parse_jira_time
 from scrum_agent.retrieval.chunking import build_chunks
 from scrum_agent.retrieval.embeddings import EmbeddingClient
 from scrum_agent.retrieval.models import ExcludedSource, RetrievalResult, RetrievedChunk
@@ -25,6 +25,17 @@ from scrum_agent.retrieval.models import ExcludedSource, RetrievalResult, Retrie
 # nearest neighbour (the check that Week 3 applies to answers, applied to
 # retrieval). Tuned per embedding model if the Week 11 evaluations demand it.
 MIN_SIMILARITY = 0.3
+
+
+def _duplicate_keys(issue: Issue) -> tuple[str, ...]:
+    """Keys of issues linked by a real Jira Duplicate link, either direction.
+
+    A retrieval hit is only ever a *potential* duplicate; these links are
+    what make a duplicate confirmed.
+    """
+    return tuple(
+        link.key for link in issue.linked_work_items if "duplicat" in link.relationship.casefold()
+    )
 
 
 class RetrievalService:
@@ -161,6 +172,7 @@ class RetrievalService:
                         snippet=row["content"],
                         similarity=round(float(row["similarity"]), 6),
                         score=round(float(row["score"]), 6),
+                        duplicate_keys=_duplicate_keys(issue),
                     )
                 )
                 continue

@@ -63,6 +63,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     search_parser.add_argument("--unresolved", action="store_true", help="only unresolved issues")
 
     subparsers.add_parser("serve", help="run the local chat web UI on 127.0.0.1 (Week 3)")
+    subparsers.add_parser(
+        "preflight", help="check local pilot readiness without Jira writes (Week 12)"
+    )
+    subparsers.add_parser("pilot-check", help="run local release gates (Week 12)")
 
     baseline_parser = subparsers.add_parser(
         "baseline",
@@ -477,6 +481,8 @@ def _related(settings: Settings, args: argparse.Namespace) -> int:
         print(f"  {hit.source_url}")
         snippet = hit.snippet if len(hit.snippet) <= 300 else f"{hit.snippet[:297]}..."
         print(f"  {snippet}")
+        if hit.duplicate_keys:
+            print(f"  confirmed duplicate of {', '.join(hit.duplicate_keys)} (Jira link)")
     for item in result.excluded:
         print(f"\n{item.issue_key}: unavailable ({item.reason}); excluded from the results.")
     if not result.hits:
@@ -556,8 +562,26 @@ def _report(settings: Settings, args: argparse.Namespace) -> int:
         jobs.close()
 
 
+def _preflight(settings: Settings) -> int:
+    from scrum_agent.pilot import format_checks, preflight
+
+    checks = preflight(settings)
+    print(format_checks(checks))
+    logging.getLogger("scrum_agent").info("pilot preflight requested")
+    if not all(check.ok for check in checks):
+        return 1
+    # A configured URL alone is not durable readiness: freshness reads the
+    # migrated database and raises a visible failure for an unreachable or
+    # unmigrated store, stale collection, or expired token.
+    return _freshness(settings)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    if args.command == "pilot-check":
+        from scrum_agent.pilot import run_pilot_checks
+
+        return run_pilot_checks(root=Path(__file__).resolve().parents[2])
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",
@@ -573,6 +597,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {location or '(root)'}: {problem['msg']}", file=sys.stderr)
         print("See .env.example for the expected variables.", file=sys.stderr)
         return 2
+    from scrum_agent.pilot import configure_local_file_logging
+
+    configure_local_file_logging(settings)
     try:
         if args.command == "sprints":
             return _sprints(settings, args)
@@ -580,6 +607,8 @@ def main(argv: list[str] | None = None) -> int:
             return _search(settings, args)
         if args.command == "serve":
             return _serve(settings)
+        if args.command == "preflight":
+            return _preflight(settings)
         if args.command == "baseline":
             return _baseline(settings, args)
         if args.command == "migrate":

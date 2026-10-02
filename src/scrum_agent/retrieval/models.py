@@ -17,7 +17,10 @@ class RetrievedChunk(BaseModel):
     heading: str | None
     snippet: str
     similarity: float  # raw cosine to the query; the no-match floor applies here
-    score: float  # fused vector+full-text rank
+    score: float
+    # Issue keys this ticket is linked to by an actual Jira Duplicate link
+    # (either direction). Empty for plain potential-duplicate suggestions.
+    duplicate_keys: tuple[str, ...] = ()  # fused vector+full-text rank
 
 
 class ExcludedSource(BaseModel):

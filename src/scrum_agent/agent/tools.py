@@ -51,9 +51,48 @@ def _text(value: object, name: str) -> str:
     return value.strip()
 
 
-def make_tools(service: SearchService, jobs=None, retrieval=None) -> list[FunctionTool]:
+_SUGGESTION_QUERY_KEYS = ("summary", "goal", "objective", "steps_to_reproduce", "context")
+
+
+def _suggestion_query(fields: dict[str, str] | None) -> str:
+    """The user's request text to search related work for, or "" for none.
+
+    Field keys differ per template (Story ``goal``, Bug ``summary``, Task
+    ``objective``), so try them in order before falling back to anything
+    the caller actually provided.
+    """
+    if not fields:
+        return ""
+    for key in _SUGGESTION_QUERY_KEYS:
+        text = fields.get(key)
+        if isinstance(text, str) and text.strip():
+            return text.strip()[:512]
+    joined = " ".join(str(value) for value in fields.values() if value)
+    return joined.strip()[:512]
+
+
+def _attach_related_tickets(
+    payload: dict, query: str, retrieval, suggestions_enabled: bool
+) -> dict:
+    """Attach verified related work without allowing retrieval to fail a draft."""
+    if not (suggestions_enabled and retrieval is not None and query):
+        return payload
+    try:
+        result = retrieval.search(query, top_k=3)
+    except Exception:
+        return payload
+    payload["related_tickets"] = [hit.model_dump() for hit in result.hits]
+    payload["sources"] = [{"issue_key": hit.issue_key} for hit in result.hits]
+    return payload
+
+
+def make_tools(
+    service: SearchService, jobs=None, retrieval=None, suggestions_enabled: bool = True
+) -> list[FunctionTool]:
     """Build the read-only tools bound to ``service`` (plus report ``jobs`` and
-    semantic ``retrieval`` when the local database and embedding key exist)."""
+    semantic ``retrieval`` when the local database and embedding key exist).
+    ``suggestions_enabled=False`` turns related-ticket suggestions off while
+    drafting itself stays available."""
 
     def get_issue(issue_key: str) -> dict:
         """Fetch one issue by its exact key (for example PAY-3).
@@ -228,14 +267,19 @@ def make_tools(service: SearchService, jobs=None, retrieval=None) -> list[Functi
         required_field/team_policy value that can safely be inferred; do not
         use open_questions as a questionnaire. ready is true only once every
         required_field and team_policy field is filled; advisory gaps never
-        block readiness.
+        block readiness. The payload's related_tickets (when present) are
+        suggestions of prior work to inspect — examples of wording, never
+        requirements for this draft.
         """
         try:
             template = get_template(default_templates(), _text(issue_type, "issue_type"))
             if fields is not None and not isinstance(fields, dict):
                 raise ValueError("fields must be a mapping of field key to text")
             draft = build_draft(template, fields)
-            return ok_draft_payload("draft_ticket", draft)
+            payload = ok_draft_payload("draft_ticket", draft)
+            return _attach_related_tickets(
+                payload, _suggestion_query(fields), retrieval, suggestions_enabled
+            )
         except Exception as exc:
             return error_payload("draft_ticket", exc)
 
@@ -251,6 +295,11 @@ def make_tools(service: SearchService, jobs=None, retrieval=None) -> list[Functi
         lookups or typed filters use the structured search tools instead.
         """
         try:
+            if not suggestions_enabled:
+                raise ValueError(
+                    "related-ticket suggestions are disabled "
+                    "(SCRUM_AGENT_SUGGESTIONS_ENABLED=false)"
+                )
             if retrieval is None:
                 raise ValueError(
                     "related-ticket search requires the local database and embedding "

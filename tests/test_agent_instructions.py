@@ -8,3 +8,14 @@ def test_drafting_instruction_requires_proposals_before_the_first_tool_call() ->
     assert "Do not ask the user to fill in the tool's `open_questions`" in AGENT_INSTRUCTION
     assert "accept the proposed draft" in AGENT_INSTRUCTION
     assert "correct any field" in AGENT_INSTRUCTION
+
+
+def test_related_tickets_are_examples_not_requirements() -> None:
+    assert "never requirements" in AGENT_INSTRUCTION
+    assert "potential" in AGENT_INSTRUCTION and "confirmed" in AGENT_INSTRUCTION
+    assert "`duplicate_keys`" in AGENT_INSTRUCTION
+
+
+def test_drafting_instruction_keeps_suggestions_out_of_the_draft() -> None:
+    assert '"Related work"' in AGENT_INSTRUCTION
+    assert "never suggestion text" in AGENT_INSTRUCTION

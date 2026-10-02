@@ -173,6 +173,14 @@ def test_embedding_settings_are_optional_by_default() -> None:
     assert settings.embedding_base_url == "https://api.z.ai/api/paas/v4"
 
 
+def test_suggestions_enabled_by_default_and_env_switchable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert make_settings().suggestions_enabled is True
+    monkeypatch.setenv("SCRUM_AGENT_SUGGESTIONS_ENABLED", "false")
+    assert make_settings().suggestions_enabled is False
+
+
 def test_embedding_base_url_must_be_https_without_trailing_slash() -> None:
     with pytest.raises(ValidationError):
         make_settings(embedding_base_url="http://api.example.com")

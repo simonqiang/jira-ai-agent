@@ -24,7 +24,8 @@ from httpx import BaseTransport
 
 from scrum_agent.agent.instructions import AGENT_INSTRUCTION
 from scrum_agent.agent.llm import ZaiAnthropicLlm
-from scrum_agent.agent.tools import make_tools
+from scrum_agent.agent.payloads import ok_draft_payload
+from scrum_agent.agent.tools import _attach_related_tickets, make_tools
 from scrum_agent.agent.usage import UsageRecorder, UsageSnapshot
 from scrum_agent.config import Settings
 from scrum_agent.drafting import build_draft, default_templates, get_template
@@ -53,6 +54,27 @@ class TurnResult:
     fetched_at: str = ""
 
 
+def _related_work_section(payload: dict) -> str:
+    """Render a draft's related-ticket suggestions, clearly not requirements."""
+    hits = payload.get("related_tickets")
+    if not isinstance(hits, list):
+        return ""
+    lines = ["", "Related work — suggestions only, not requirements:"]
+    for hit in hits:
+        if not isinstance(hit, dict):
+            continue
+        line = f"- {hit.get('issue_key')} — {hit.get('title')} (similarity {hit.get('similarity')})"
+        duplicates = hit.get("duplicate_keys") or ()
+        if duplicates:
+            line += f" (confirmed duplicate of {', '.join(duplicates)} via a Jira link)"
+        lines.append(line)
+    lines.append(
+        "These describe prior work, not this request; nothing above belongs to the draft. "
+        "A suggestion is a potential duplicate until a Jira link confirms it."
+    )
+    return "\n".join(lines)
+
+
 def _draft_answer(payload: dict) -> str:
     """Render a tool-backed draft without letting the model discard proposals."""
     rendered = payload.get("rendered")
@@ -60,27 +82,30 @@ def _draft_answer(payload: dict) -> str:
         return ""
 
     if payload.get("requires_confirmation"):
-        return (
+        body = (
             "Here is a proposed draft. Values marked `Proposal:` are editable defaults; "
             "please accept or correct them.\n\n"
             f"{rendered.rstrip()}"
         )
-    if payload.get("ready"):
-        return f"Here is the completed draft:\n\n{rendered.rstrip()}"
+    elif payload.get("ready"):
+        body = f"Here is the completed draft:\n\n{rendered.rstrip()}"
+    else:
+        questions = payload.get("open_questions")
+        body = f"Here is the draft:\n\n{rendered.rstrip()}"
+        if isinstance(questions, list):
+            question_lines = [
+                f"{index}. {item['question']}"
+                for index, item in enumerate(questions, start=1)
+                if isinstance(item, dict) and isinstance(item.get("question"), str)
+            ]
+            if question_lines:
+                body += "\n\nTo complete it, please confirm:\n" + "\n".join(question_lines)
+    return body + _related_work_section(payload)
 
-    questions = payload.get("open_questions")
-    if not isinstance(questions, list):
-        return f"Here is the draft:\n\n{rendered.rstrip()}"
-    question_lines = [
-        f"{index}. {item['question']}"
-        for index, item in enumerate(questions, start=1)
-        if isinstance(item, dict) and isinstance(item.get("question"), str)
-    ]
-    suffix = "\n\nTo complete it, please confirm:\n" + "\n".join(question_lines)
-    return f"Here is the draft:\n\n{rendered.rstrip()}{suffix}"
 
-
-def _explicit_story_draft(user_text: str) -> str | None:
+def _explicit_story_draft(
+    user_text: str, retrieval=None, suggestions_enabled: bool = True
+) -> dict | None:
     """Handle an unambiguous user-story request without relying on tool choice."""
     match = _EXPLICIT_STORY_REQUEST.search(user_text)
     if match is None:
@@ -93,11 +118,18 @@ def _explicit_story_draft(user_text: str) -> str | None:
         get_template(default_templates(), "Story"),
         {"role": role, "goal": goal},
     )
-    return _draft_answer(draft)
+    return _attach_related_tickets(
+        ok_draft_payload("draft_ticket", draft), goal, retrieval, suggestions_enabled
+    )
 
 
 def build_agent(
-    service: SearchService, llm: BaseLlm, usage: UsageRecorder, jobs=None, retrieval=None
+    service: SearchService,
+    llm: BaseLlm,
+    usage: UsageRecorder,
+    jobs=None,
+    retrieval=None,
+    suggestions_enabled: bool = True,
 ) -> LlmAgent:
     """Assemble the read-only pilot agent."""
     return LlmAgent(
@@ -105,7 +137,7 @@ def build_agent(
         model=llm,
         description="Read-only Scrum Master Jira assistant for the pilot board.",
         instruction=AGENT_INSTRUCTION,
-        tools=make_tools(service, jobs, retrieval),
+        tools=make_tools(service, jobs, retrieval, suggestions_enabled),
         after_model_callback=usage.on_model_response,
     )
 
@@ -148,7 +180,11 @@ class ChatService:
         self._service = SearchService(self._client)
         self.usage = UsageRecorder()
         self._jobs = jobs
-        self._agent = build_agent(self._service, llm, self.usage, jobs, retrieval)
+        self._retrieval = retrieval
+        self._suggestions_enabled = settings.suggestions_enabled
+        self._agent = build_agent(
+            self._service, llm, self.usage, jobs, retrieval, settings.suggestions_enabled
+        )
         self._sessions = build_session_service(settings)
         self._runner = Runner(
             app_name=self.APP_NAME, agent=self._agent, session_service=self._sessions
@@ -179,11 +215,12 @@ class ChatService:
         self._turn_counts[session_id] = turn_index
         if turn_index > self.MAX_TURNS:
             return TurnResult(answer=_MAX_TURNS_NOTICE, turn_index=turn_index)
-        if draft := _explicit_story_draft(text):
+        if payload := _explicit_story_draft(text, self._retrieval, self._suggestions_enabled):
             return TurnResult(
-                answer=draft,
+                answer=_draft_answer(payload),
+                sources=tuple(payload["sources"]),
                 turn_index=turn_index,
-                fetched_at=datetime.now(UTC).isoformat(timespec="seconds"),
+                fetched_at=payload["fetched_at"],
             )
 
         if (

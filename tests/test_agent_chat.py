@@ -323,6 +323,41 @@ async def test_draft_tool_payload_overrides_model_missing_field_questionnaire() 
     await chat.aclose()
 
 
+def test_draft_answer_labels_related_work_as_suggestions() -> None:
+    from scrum_agent.agent.chat import _draft_answer
+
+    payload = {
+        "rendered": "Proposal: story body from the user's request",
+        "requires_confirmation": True,
+        "related_tickets": [
+            {
+                "issue_key": "PAY-2",
+                "title": "SENTINEL prior work title",
+                "similarity": 0.8,
+                "duplicate_keys": ("PAY-1",),
+            }
+        ],
+    }
+
+    answer = _draft_answer(payload)
+    marker = answer.index("Related work")
+    # The suggestion text lives only in the labelled section, never in the
+    # draft itself (intent preservation).
+    assert marker > answer.index("Here is a proposed draft")
+    assert "SENTINEL prior work title" not in answer[:marker]
+    assert "suggestions only, not requirements" in answer[marker:]
+    assert "confirmed duplicate of PAY-1 via a Jira link" in answer[marker:]
+    assert "nothing above belongs to the draft" in answer
+
+
+def test_draft_without_related_tickets_has_no_related_section() -> None:
+    from scrum_agent.agent.chat import _draft_answer
+
+    answer = _draft_answer({"rendered": "draft body", "ready": True})
+
+    assert "Related work" not in answer
+
+
 async def test_explicit_story_request_bypasses_the_model_questionnaire() -> None:
     chat, _, fake = make_chat(steps=[final("Please answer the open questions.")])
 
@@ -334,6 +369,28 @@ async def test_explicit_story_request_bypasses_the_model_questionnaire() -> None
 
     assert "Proposal:" in result.answer
     assert "accept or correct" in result.answer
+    assert fake._cursor == 0
+    await chat.aclose()
+
+
+async def test_explicit_story_request_includes_verified_related_work() -> None:
+    from tests.test_agent_tools import _retrieval_result, _StubRetrieval
+
+    retrieval = _StubRetrieval(_retrieval_result())
+    chat, _, fake = make_chat(retrieval=retrieval)
+
+    result = await chat.run_turn(
+        SESSION,
+        "Draft a ticket that was business user I want to GCDB receive "
+        "the last invoice update date from IDW via SFTP server",
+    )
+
+    assert "Related work" in result.answer
+    assert "PAY-1" in result.answer
+    assert list(result.sources) == [{"issue_key": "PAY-1"}]
+    assert retrieval.calls == [
+        ("GCDB receive the last invoice update date from IDW via SFTP server", 3)
+    ]
     assert fake._cursor == 0
     await chat.aclose()
 
