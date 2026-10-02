@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     embedding_api_key: SecretStr | None = None
     embedding_base_url: str = "https://api.z.ai/api/paas/v4"
 
+    # Week 11: related-ticket suggestions (find_related_tickets and the
+    # related-work section on drafts) can be switched off without touching the
+    # retrieval index; core drafting keeps working.
+    suggestions_enabled: bool = True
+
     LOOPBACK_HOSTS: ClassVar[tuple[str, ...]] = ("127.0.0.1", "::1", "localhost")
 
     @field_validator(
