@@ -63,6 +63,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     search_parser.add_argument("--unresolved", action="store_true", help="only unresolved issues")
 
     subparsers.add_parser("serve", help="run the local chat web UI on 127.0.0.1 (Week 3)")
+    subparsers.add_parser(
+        "preflight", help="check local pilot readiness without Jira writes (Week 12)"
+    )
 
     baseline_parser = subparsers.add_parser(
         "baseline",
@@ -558,6 +561,14 @@ def _report(settings: Settings, args: argparse.Namespace) -> int:
         jobs.close()
 
 
+def _preflight(settings: Settings) -> int:
+    from scrum_agent.pilot import format_checks, preflight
+
+    checks = preflight(settings)
+    print(format_checks(checks))
+    return 0 if all(check.ok for check in checks) else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     logging.basicConfig(
@@ -582,6 +593,8 @@ def main(argv: list[str] | None = None) -> int:
             return _search(settings, args)
         if args.command == "serve":
             return _serve(settings)
+        if args.command == "preflight":
+            return _preflight(settings)
         if args.command == "baseline":
             return _baseline(settings, args)
         if args.command == "migrate":

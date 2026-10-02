@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     web_host: str = "127.0.0.1"
     web_port: int = Field(default=8741, ge=1, le=65535)
     approval_user_id: str = Field(default="local-pilot", min_length=1, max_length=100)
+    log_directory: str | None = None
+    log_max_bytes: int = Field(default=1_000_000, ge=10_000, le=100_000_000)
+    log_backup_count: int = Field(default=5, ge=1, le=20)
 
     # Week 4: local collection storage and the credential-freshness alarm. Both
     # are optional so Week 1-3 commands keep working without a database;
@@ -94,6 +97,7 @@ class Settings(BaseSettings):
         "database_url",
         "embedding_model",
         "embedding_base_url",
+        "log_directory",
         mode="before",
     )
     @classmethod
