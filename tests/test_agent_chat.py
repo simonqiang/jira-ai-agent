@@ -323,6 +323,41 @@ async def test_draft_tool_payload_overrides_model_missing_field_questionnaire() 
     await chat.aclose()
 
 
+def test_draft_answer_labels_related_work_as_suggestions() -> None:
+    from scrum_agent.agent.chat import _draft_answer
+
+    payload = {
+        "rendered": "Proposal: story body from the user's request",
+        "requires_confirmation": True,
+        "related_tickets": [
+            {
+                "issue_key": "PAY-2",
+                "title": "SENTINEL prior work title",
+                "similarity": 0.8,
+                "duplicate_keys": ("PAY-1",),
+            }
+        ],
+    }
+
+    answer = _draft_answer(payload)
+    marker = answer.index("Related work")
+    # The suggestion text lives only in the labelled section, never in the
+    # draft itself (intent preservation).
+    assert marker > answer.index("Here is a proposed draft")
+    assert "SENTINEL prior work title" not in answer[:marker]
+    assert "suggestions only, not requirements" in answer[marker:]
+    assert "confirmed duplicate of PAY-1 via a Jira link" in answer[marker:]
+    assert "nothing above belongs to the draft" in answer
+
+
+def test_draft_without_related_tickets_has_no_related_section() -> None:
+    from scrum_agent.agent.chat import _draft_answer
+
+    answer = _draft_answer({"rendered": "draft body", "ready": True})
+
+    assert "Related work" not in answer
+
+
 async def test_explicit_story_request_bypasses_the_model_questionnaire() -> None:
     chat, _, fake = make_chat(steps=[final("Please answer the open questions.")])
 

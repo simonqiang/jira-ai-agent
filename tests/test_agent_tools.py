@@ -552,3 +552,95 @@ def test_find_related_tickets_validates_inputs_and_translates_errors() -> None:
     assert tools["find_related_tickets"]("   ")["ok"] is False
     assert tools["find_related_tickets"]("q", top_k=99)["ok"] is False
     assert stub.calls == []  # neither call reached the service
+
+
+# -- related-ticket suggestions in drafting (Week 11) ------------------------------
+
+
+def test_draft_ticket_with_retrieval_attaches_related_suggestions() -> None:
+    from tests.agent_fakes import service_over
+
+    stub = _StubRetrieval(_retrieval_result())
+    with service_over(FakeJira()) as probe:
+        tools = {tool.name: tool.func for tool in make_tools(probe.service, None, stub)}
+    payload = tools["draft_ticket"](
+        issue_type="Story", fields={"goal": "as a payer I want one retry"}
+    )
+
+    assert payload["ok"] is True
+    assert payload["related_tickets"][0]["issue_key"] == "PAY-1"
+    assert payload["sources"] == [{"issue_key": "PAY-1"}]
+    assert stub.calls == [("as a payer I want one retry", 3)]
+
+
+def test_draft_ticket_suggestions_query_uses_the_request_field() -> None:
+    from tests.agent_fakes import service_over
+
+    stub = _StubRetrieval(_retrieval_result())
+    with service_over(FakeJira()) as probe:
+        tools = {tool.name: tool.func for tool in make_tools(probe.service, None, stub)}
+
+    # Story: goal wins; Bug: summary; Task: objective; unknown keys fall
+    # through to the values actually provided.
+    tools["draft_ticket"](issue_type="Story", fields={"role": "R", "goal": "G"})
+    tools["draft_ticket"](issue_type="Bug", fields={"summary": "S", "context": "C"})
+    tools["draft_ticket"](issue_type="Task", fields={"objective": "O"})
+    tools["draft_ticket"](issue_type="Story", fields={"custom": "X"})
+
+    assert stub.calls == [("G", 3), ("S", 3), ("O", 3), ("X", 3)]
+
+
+def test_draft_ticket_without_retrieval_has_no_suggestions() -> None:
+    from tests.agent_fakes import service_over
+
+    with service_over(FakeJira()) as probe:
+        tools = {tool.name: tool.func for tool in make_tools(probe.service)}
+    payload = tools["draft_ticket"](issue_type="Story", fields={"goal": "x"})
+
+    assert payload["ok"] is True
+    assert "related_tickets" not in payload
+
+
+def test_draft_ticket_survives_retrieval_failure() -> None:
+    from tests.agent_fakes import service_over
+
+    stub = _StubRetrieval(error=RuntimeError("retrieval down"))
+    with service_over(FakeJira()) as probe:
+        tools = {tool.name: tool.func for tool in make_tools(probe.service, None, stub)}
+    payload = tools["draft_ticket"](issue_type="Story", fields={"goal": "x"})
+
+    assert payload["ok"] is True
+    assert "related_tickets" not in payload
+    assert payload["sources"] == []
+
+
+def test_suggestions_disabled_find_related_tickets_says_disabled() -> None:
+    from tests.agent_fakes import service_over
+
+    stub = _StubRetrieval(_retrieval_result())
+    with service_over(FakeJira()) as probe:
+        tools = {
+            tool.name: tool.func
+            for tool in make_tools(probe.service, None, stub, suggestions_enabled=False)
+        }
+    payload = tools["find_related_tickets"]("payment retry")
+
+    assert payload["ok"] is False
+    assert "SCRUM_AGENT_SUGGESTIONS_ENABLED" in payload["error"]["message"]
+    assert stub.calls == []
+
+
+def test_suggestions_disabled_draft_skips_retrieval() -> None:
+    from tests.agent_fakes import service_over
+
+    stub = _StubRetrieval(_retrieval_result())
+    with service_over(FakeJira()) as probe:
+        tools = {
+            tool.name: tool.func
+            for tool in make_tools(probe.service, None, stub, suggestions_enabled=False)
+        }
+    payload = tools["draft_ticket"](issue_type="Story", fields={"goal": "as a payer"})
+
+    assert payload["ok"] is True
+    assert "related_tickets" not in payload
+    assert stub.calls == []
