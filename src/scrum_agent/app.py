@@ -567,7 +567,13 @@ def _preflight(settings: Settings) -> int:
 
     checks = preflight(settings)
     print(format_checks(checks))
-    return 0 if all(check.ok for check in checks) else 1
+    logging.getLogger("scrum_agent").info("pilot preflight requested")
+    if not all(check.ok for check in checks):
+        return 1
+    # A configured URL alone is not durable readiness: freshness reads the
+    # migrated database and raises a visible failure for an unreachable or
+    # unmigrated store, stale collection, or expired token.
+    return _freshness(settings)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -575,7 +581,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "pilot-check":
         from scrum_agent.pilot import run_pilot_checks
 
-        return run_pilot_checks(root=Path.cwd())
+        return run_pilot_checks(root=Path(__file__).resolve().parents[2])
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",

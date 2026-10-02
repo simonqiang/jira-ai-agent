@@ -70,6 +70,11 @@ def test_optional_file_logging_is_rotating_and_idempotent(tmp_path) -> None:
     content = (tmp_path / "scrum-agent.log").read_text(encoding="utf-8")
     assert content.endswith("safe test message\n")
     assert len(logger.handlers) == before + 1
+    handler = next(
+        handler for handler in logger.handlers if getattr(handler, "_scrum_agent_pilot_log", False)
+    )
+    logger.removeHandler(handler)
+    handler.close()
 
 
 def test_pilot_check_uses_current_source_and_propagates_failure(monkeypatch, tmp_path) -> None:
@@ -85,3 +90,30 @@ def test_pilot_check_uses_current_source_and_propagates_failure(monkeypatch, tmp
     assert captured["cwd"] == tmp_path
     assert captured["env"]["PYTHONPATH"].split(":")[0] == "src"
     assert "tests/test_ticketing_updates.py" in captured["command"]
+
+
+def test_pilot_check_strips_application_secrets(monkeypatch, tmp_path) -> None:
+    captured = {}
+
+    def fake_run(_command, *, cwd, env, check):
+        captured.update(env=env)
+        return subprocess.CompletedProcess([], 0)
+
+    monkeypatch.setenv("SCRUM_AGENT_JIRA_API_TOKEN", "must-not-reach-tests")
+    monkeypatch.setattr("scrum_agent.pilot.subprocess.run", fake_run)
+    assert run_pilot_checks(root=tmp_path) == 0
+    assert "SCRUM_AGENT_JIRA_API_TOKEN" not in captured["env"]
+
+
+def test_cli_preflight_runs_freshness_after_static_checks(monkeypatch) -> None:
+    from scrum_agent import app
+
+    settings = make_settings(
+        database_url="postgresql://pilot:password@127.0.0.1/scrum_agent",
+        model_name="model",
+        model_api_key="secret",
+        embedding_model="embed",
+    )
+    monkeypatch.setattr(app, "_freshness", lambda _settings: 7)
+
+    assert app._preflight(settings) == 7

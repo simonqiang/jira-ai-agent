@@ -24,16 +24,20 @@ agreed pilot dataset.
 
 ## Recovery drill (manual-safe, scratch database only)
 
-Dump after a successful collection. Restore only to a freshly created named
-scratch database, compare migration rows/table counts, then drop it. Never
-restore into `scrum_agent` during this drill.
+Dump after a successful collection into a private, ignored directory. Restore
+only to a freshly created named scratch database, verify migrations and table
+counts, then drop it. Never restore into `scrum_agent` during this drill.
 
 ```bash
-docker compose exec -T db pg_dump -U scrum_agent scrum_agent > pilot-backup.sql
+set -euo pipefail
+backup_dir=/absolute/path/outside/the/repository/scrum-agent-backups; mkdir -p "$backup_dir"
+docker compose exec -T db pg_dump -U scrum_agent scrum_agent > "$backup_dir/pilot-backup.sql"
 docker compose exec db createdb -U scrum_agent scrum_agent_restore_check
-docker compose exec -T db psql -U scrum_agent -d scrum_agent_restore_check < pilot-backup.sql
+docker compose exec -T db psql -v ON_ERROR_STOP=1 -U scrum_agent -d scrum_agent_restore_check < "$backup_dir/pilot-backup.sql"
+docker compose exec db psql -U scrum_agent -d scrum_agent_restore_check -c 'SELECT version FROM scrum_agent.schema_migrations ORDER BY version;'
+docker compose exec db psql -U scrum_agent -d scrum_agent_restore_check -c 'SELECT count(*) FROM scrum_agent.issue_snapshots;'
 docker compose exec db dropdb -U scrum_agent scrum_agent_restore_check
-rm pilot-backup.sql
+rm "$backup_dir/pilot-backup.sql"
 ```
 
 For stopped collection or report work, rerun the command; durable records retain

@@ -17,6 +17,9 @@ _PILOT_GATE_TESTS = (
     "tests/test_webapp.py",
     "tests/test_ticketing.py",
     "tests/test_ticketing_updates.py",
+    "tests/test_agent_chat.py",
+    "tests/test_agent_tools.py",
+    "tests/test_agent_instructions.py",
     "tests/test_reports.py",
     "tests/test_retrieval.py",
     "tests/test_eval_week11.py",
@@ -104,6 +107,9 @@ def configure_local_file_logging(settings: Settings) -> None:
 def run_pilot_checks(*, root: Path) -> int:
     """Run fixed release gates from this worktree without loading local settings."""
     environment = os.environ.copy()
+    for name in tuple(environment):
+        if name.startswith("SCRUM_AGENT_"):
+            environment.pop(name)
     environment["PYTHONPATH"] = "src" + (
         os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else ""
     )
