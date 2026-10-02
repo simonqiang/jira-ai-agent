@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 
-from scrum_agent.pilot import configure_local_file_logging, format_checks, preflight
+from scrum_agent.pilot import (
+    configure_local_file_logging,
+    format_checks,
+    preflight,
+    run_pilot_checks,
+)
 from tests.conftest import make_settings
 
 
@@ -64,3 +70,18 @@ def test_optional_file_logging_is_rotating_and_idempotent(tmp_path) -> None:
     content = (tmp_path / "scrum-agent.log").read_text(encoding="utf-8")
     assert content.endswith("safe test message\n")
     assert len(logger.handlers) == before + 1
+
+
+def test_pilot_check_uses_current_source_and_propagates_failure(monkeypatch, tmp_path) -> None:
+    captured = {}
+
+    def fake_run(command, *, cwd, env, check):
+        captured.update(command=command, cwd=cwd, env=env, check=check)
+        return subprocess.CompletedProcess(command, 7)
+
+    monkeypatch.setattr("scrum_agent.pilot.subprocess.run", fake_run)
+
+    assert run_pilot_checks(root=tmp_path) == 7
+    assert captured["cwd"] == tmp_path
+    assert captured["env"]["PYTHONPATH"].split(":")[0] == "src"
+    assert "tests/test_ticketing_updates.py" in captured["command"]

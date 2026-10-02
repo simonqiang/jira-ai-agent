@@ -66,6 +66,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     subparsers.add_parser(
         "preflight", help="check local pilot readiness without Jira writes (Week 12)"
     )
+    subparsers.add_parser("pilot-check", help="run local release gates (Week 12)")
 
     baseline_parser = subparsers.add_parser(
         "baseline",
@@ -571,6 +572,10 @@ def _preflight(settings: Settings) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    if args.command == "pilot-check":
+        from scrum_agent.pilot import run_pilot_checks
+
+        return run_pilot_checks(root=Path.cwd())
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",

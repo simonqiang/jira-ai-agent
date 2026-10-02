@@ -3,11 +3,25 @@
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
+import sys
 from dataclasses import dataclass
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from scrum_agent.config import Settings, require_embedding_settings, require_model_settings
+
+_PILOT_GATE_TESTS = (
+    "tests/test_config.py",
+    "tests/test_webapp.py",
+    "tests/test_ticketing.py",
+    "tests/test_ticketing_updates.py",
+    "tests/test_reports.py",
+    "tests/test_retrieval.py",
+    "tests/test_eval_week11.py",
+    "tests/test_pilot.py",
+)
 
 
 @dataclass(frozen=True)
@@ -85,3 +99,18 @@ def configure_local_file_logging(settings: Settings) -> None:
     handler._scrum_agent_pilot_log = True  # type: ignore[attr-defined]
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     logger.addHandler(handler)
+
+
+def run_pilot_checks(*, root: Path) -> int:
+    """Run fixed release gates from this worktree without loading local settings."""
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = "src" + (
+        os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else ""
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", * _PILOT_GATE_TESTS],
+        cwd=root,
+        env=environment,
+        check=False,
+    )
+    return result.returncode
