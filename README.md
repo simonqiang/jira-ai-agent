@@ -356,6 +356,17 @@ drafting keeps working. Quality gates live in `tests/test_eval_week11.py`:
 abstention scored separately, and ≥80% duplicate-suggestion precision across
 ≥20 reviewed suggestions.
 
+### Personal-pilot readiness (Week 12)
+
+Before using the integrated local pilot, run `scrum-agent preflight`; it reports
+safe configuration readiness without displaying secrets or writing Jira. Run
+`scrum-agent pilot-check` to execute fixed authorization, write-integrity,
+report, retrieval and operational test gates from this worktree. Set
+`SCRUM_AGENT_LOG_DIRECTORY` for rotating local logs; stderr logging remains on.
+PostgreSQL preserves ADK session state and application records across restarts,
+while the rendered browser transcript is transient. See [the Week 12 runbook](docs/superpowers/runbooks/week-12-personal-pilot.md)
+for the manual-live workflow, scratch-only restore drill and working-week log.
+
 ## Layout
 
 ```
