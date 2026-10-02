@@ -341,6 +341,21 @@ text never reaches the model or the output. In chat, the
 suggestion, never proof of duplication. No approximate (IVFFlat/HNSW) index is
 built until a benchmark justifies one.
 
+### Related-ticket suggestions in drafting (Week 11)
+
+`draft_ticket` attaches up to three verified related tickets to the draft as
+**related work — suggestions only, not requirements**. The draft itself is
+built from the user's request and labelled proposals; suggestion text never
+enters it. A hit describing the same work is a *potential* duplicate; it is a
+*confirmed* duplicate only when the hit carries `duplicate_keys` from a real
+Jira Duplicate link (`scrum-agent related` prints the same confirmation, and
+the chat agent treats rejected suggestions as dropped). Set
+`SCRUM_AGENT_SUGGESTIONS_ENABLED=false` to switch suggestions off — core
+drafting keeps working. Quality gates live in `tests/test_eval_week11.py`:
+53 held-out labeled queries with ≥90% answerable top-5 required, no-match
+abstention scored separately, and ≥80% duplicate-suggestion precision across
+≥20 reviewed suggestions.
+
 ## Layout
 
 ```
