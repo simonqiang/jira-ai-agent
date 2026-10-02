@@ -477,6 +477,8 @@ def _related(settings: Settings, args: argparse.Namespace) -> int:
         print(f"  {hit.source_url}")
         snippet = hit.snippet if len(hit.snippet) <= 300 else f"{hit.snippet[:297]}..."
         print(f"  {snippet}")
+        if hit.duplicate_keys:
+            print(f"  confirmed duplicate of {', '.join(hit.duplicate_keys)} (Jira link)")
     for item in result.excluded:
         print(f"\n{item.issue_key}: unavailable ({item.reason}); excluded from the results.")
     if not result.hits:

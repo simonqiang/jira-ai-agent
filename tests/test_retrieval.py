@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from scrum_agent.jira.models import Issue
+from scrum_agent.jira.models import Issue, LinkedWorkItem
 from scrum_agent.retrieval.chunking import _MAX_CHARS, build_chunks
 from scrum_agent.retrieval.embeddings import EmbeddingClient, EmbeddingError
 from scrum_agent.retrieval.service import MIN_SIMILARITY, RetrievalService
@@ -73,7 +73,12 @@ def _issue(key: str, summary: str, description: dict | str | None, updated: date
     }
 
 
-def _issue_model(key: str, summary: str, updated: datetime = _T0) -> Issue:
+def _issue_model(
+    key: str,
+    summary: str,
+    updated: datetime = _T0,
+    linked: tuple[tuple[str, str], ...] = (),
+) -> Issue:
     return Issue(
         key=key,
         id=f"100{key}",
@@ -83,6 +88,15 @@ def _issue_model(key: str, summary: str, updated: datetime = _T0) -> Issue:
         updated="2026-10-01T12:00:00.000+0000"
         if updated == _T0
         else updated.isoformat(timespec="milliseconds").replace("+00:00", "+0000"),
+        linked_work_items=tuple(
+            LinkedWorkItem(
+                relationship=relationship,
+                key=other,
+                summary=f"Summary of {other}",
+                status="Open",
+            )
+            for relationship, other in linked
+        ),
     )
 
 
@@ -287,6 +301,44 @@ def test_search_deduplicates_to_one_hit_per_issue_and_rechecks_once() -> None:
     assert len(client.jqls) == 1 and "PAY-1" in client.jqls[0]
     assert result.hits[0].source_url == f"https://{_SITE}/browse/PAY-1"
     assert result.hits[0].similarity >= MIN_SIMILARITY
+
+
+def test_search_attaches_confirmed_duplicate_keys_from_live_links() -> None:
+    snapshots = [
+        _issue("PAY-3", "refund duplicated twice", _para("Refund ran two times.")),
+        _issue("PAY-6", "duplicate refund attempts", _para("See PAY-3.")),
+    ]
+    live = [
+        _issue_model(
+            "PAY-3",
+            "refund duplicated twice",
+            linked=(("Is duplicated by", "PAY-6"),),
+        ),
+        _issue_model(
+            "PAY-6",
+            "duplicate refund attempts",
+            linked=(("Duplicates", "PAY-3"),),
+        ),
+    ]
+    service, _, _ = _service(snapshots, live)
+    service.reindex()
+
+    hit = service.search("duplicate refund attempts").hits[0]
+    assert hit.issue_key == "PAY-6"
+    assert hit.duplicate_keys == ("PAY-3",)
+
+    inward = service.search("refund duplicated twice")
+    assert inward.hits[0].issue_key == "PAY-3"
+    assert inward.hits[0].duplicate_keys == ("PAY-6",)
+
+
+def test_issues_without_duplicate_links_carry_no_duplicate_keys() -> None:
+    snapshots = [_issue("PAY-1", "payment retried but silently fails", _para("Retry gap."))]
+    live = [_issue_model("PAY-1", "payment retried but silently fails")]
+    service, _, _ = _service(snapshots, live)
+    service.reindex()
+
+    assert service.search("payment retried but silently fails").hits[0].duplicate_keys == ()
 
 
 def test_search_falls_back_to_full_text_for_exact_terms() -> None:
