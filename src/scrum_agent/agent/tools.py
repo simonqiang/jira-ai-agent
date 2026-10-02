@@ -224,11 +224,11 @@ def make_tools(service: SearchService, jobs=None, retrieval=None) -> list[Functi
         issue_type must exactly match a template from list_draft_templates
         (Story, Bug or Task). fields maps each template field's key to text:
         the user's exact words where they gave them, otherwise your clearly
-        labelled proposal. Any required_field/team_policy field you omit comes
-        back in open_questions: propose a concrete value for each instead of
-        asking the user to write it, then call this tool again with the text
-        they accepted. ready is true only once every required_field and
-        team_policy field is filled; advisory gaps never block readiness.
+        labelled proposal. Before the first call, propose every
+        required_field/team_policy value that can safely be inferred; do not
+        use open_questions as a questionnaire. ready is true only once every
+        required_field and team_policy field is filled; advisory gaps never
+        block readiness.
         """
         try:
             template = get_template(default_templates(), _text(issue_type, "issue_type"))

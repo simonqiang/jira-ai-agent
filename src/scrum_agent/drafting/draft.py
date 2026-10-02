@@ -1,11 +1,10 @@
 """Build an editable ticket draft from a template and user-supplied fields.
 
-Drafting never invents content: every section either carries text the caller
-provided or, for a required/team-policy field, becomes an explicit open
-question. Advisory gaps produce a writing suggestion instead of a question —
-they improve the draft but never block it. Callers pass plain strings already
-elicited from the user (typically the conversational agent); this module does
-no generation and no field-value guessing.
+Drafting preserves user text and adds bounded, clearly labelled Story
+proposals when a role and goal are available. Those proposals avoid turning a
+routine request into a questionnaire, but still require the user to confirm
+or correct them before the draft is ready. Genuinely unknown content remains
+an open question; advisory gaps remain optional suggestions.
 """
 
 from __future__ import annotations
@@ -20,6 +19,39 @@ def _clean(value: object) -> str | None:
     return stripped or None
 
 
+def _story_proposals(template: TicketTemplate, provided: dict[str, str]) -> dict[str, str]:
+    """Supply safe Story defaults once the user states who wants what.
+
+    The proposals intentionally avoid domain-specific facts: they describe the
+    requested outcome, a conservative boundary, and observable integration
+    behavior. The caller marks them as proposals and requires confirmation.
+    """
+    if template.issue_type != "Story":
+        return {}
+    role = _clean(provided.get("role"))
+    goal = _clean(provided.get("goal"))
+    if role is None or goal is None:
+        return {}
+
+    requested_outcome = goal.rstrip(".")
+    proposals = {
+        "benefit": (
+            f"{role.capitalize()} can use {requested_outcome} without manual "
+            "transfer or reconciliation."
+        ),
+        "scope": (
+            f"In scope: deliver {requested_outcome}. Out of scope: changes to source data, "
+            "historical backfill, and unrelated integrations."
+        ),
+        "acceptance_criteria": (
+            "Given the source system publishes the requested data, when the scheduled "
+            "integration runs, then the target system receives and stores it; and transfer "
+            "failures are visible for follow-up."
+        ),
+    }
+    return {key: value for key, value in proposals.items() if _clean(provided.get(key)) is None}
+
+
 def build_draft(template: TicketTemplate, fields: dict[str, str] | None) -> dict:
     """Render one draft: populated sections, gaps as questions, readiness.
 
@@ -28,6 +60,7 @@ def build_draft(template: TicketTemplate, fields: dict[str, str] | None) -> dict
     slightly stale field sets without failing.
     """
     provided = fields or {}
+    proposed = _story_proposals(template, provided)
     sections: list[dict] = []
     missing_required: list[str] = []
     missing_team_policy: list[str] = []
@@ -35,13 +68,14 @@ def build_draft(template: TicketTemplate, fields: dict[str, str] | None) -> dict
     open_questions: list[dict] = []
 
     for field in template.fields:
-        value = _clean(provided.get(field.key))
+        value = _clean(provided.get(field.key)) or proposed.get(field.key)
         sections.append(
             {
                 "key": field.key,
                 "label": field.label,
                 "category": field.category,
                 "value": value,
+                "proposed": field.key in proposed,
             }
         )
         if value is not None:
@@ -55,7 +89,8 @@ def build_draft(template: TicketTemplate, fields: dict[str, str] | None) -> dict
         elif field.hint:
             advisory_suggestions.append({"key": field.key, "suggestion": field.hint})
 
-    ready = not missing_required and not missing_team_policy
+    requires_confirmation = bool(proposed)
+    ready = not missing_required and not missing_team_policy and not requires_confirmation
     return {
         "issue_type": template.issue_type,
         "template_version": template.version,
@@ -64,6 +99,8 @@ def build_draft(template: TicketTemplate, fields: dict[str, str] | None) -> dict
         "missing_team_policy_fields": missing_team_policy,
         "advisory_suggestions": advisory_suggestions,
         "open_questions": open_questions,
+        "proposed_fields": list(proposed),
+        "requires_confirmation": requires_confirmation,
         "ready": ready,
         "rendered": render_draft(template, sections),
     }
@@ -79,7 +116,8 @@ def render_draft(template: TicketTemplate, sections: list[dict]) -> str:
     for section in sections:
         lines.append(f"{section['label']}:")
         if section["value"] is not None:
-            lines.append(section["value"])
+            prefix = "Proposal: " if section["proposed"] else ""
+            lines.append(f"{prefix}{section['value']}")
         elif section["category"] in ("required_field", "team_policy"):
             lines.append("(missing — see open questions)")
         else:

@@ -296,6 +296,48 @@ async def test_blocked_follow_up_reports_accurate_zero() -> None:
     await chat.aclose()
 
 
+async def test_draft_tool_payload_overrides_model_missing_field_questionnaire() -> None:
+    chat, _, _ = make_chat(
+        steps=[
+            ScriptedStep(
+                tool_calls=(
+                    tool_call(
+                        "draft_ticket",
+                        issue_type="Story",
+                        fields={
+                            "role": "business user",
+                            "goal": "GCDB receives invoice update dates from IDW via SFTP",
+                        },
+                    ),
+                )
+            ),
+            final("The draft has missing fields. Please answer the open questions."),
+        ]
+    )
+
+    result = await chat.run_turn(SESSION, "Draft a ticket")
+
+    assert "Proposal:" in result.answer
+    assert "accept or correct" in result.answer
+    assert "Please answer the open questions." not in result.answer
+    await chat.aclose()
+
+
+async def test_explicit_story_request_bypasses_the_model_questionnaire() -> None:
+    chat, _, fake = make_chat(steps=[final("Please answer the open questions.")])
+
+    result = await chat.run_turn(
+        SESSION,
+        "Draft a ticket that was business user I want to GCDB receive "
+        "the last invoice update date from IDW via SFTP server",
+    )
+
+    assert "Proposal:" in result.answer
+    assert "accept or correct" in result.answer
+    assert fake._cursor == 0
+    await chat.aclose()
+
+
 async def test_revoked_access_followup_never_reuses_restricted_context() -> None:
     jira = FakeJira()
     chat, _, _ = make_chat(

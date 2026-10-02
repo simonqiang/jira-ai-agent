@@ -422,6 +422,25 @@ def test_draft_ticket_never_calls_jira() -> None:
     assert probe.requests == []  # drafting made zero HTTP calls
 
 
+def test_draft_story_proposes_missing_agile_fields_instead_of_asking_questions() -> None:
+    with tools_over(FakeJira()) as tools:
+        payload = tools["draft_ticket"](
+            issue_type="Story",
+            fields={
+                "role": "business user",
+                "goal": "GCDB receives the latest invoice update date from IDW via SFTP",
+            },
+        )
+
+    assert payload["ok"] is True
+    assert payload["missing_required_fields"] == []
+    assert payload["missing_team_policy_fields"] == []
+    assert payload["open_questions"] == []
+    assert payload["proposed_fields"] == ["benefit", "scope", "acceptance_criteria"]
+    assert payload["requires_confirmation"] is True
+    assert "Proposal:" in payload["rendered"]
+
+
 def test_draft_ticket_incomplete_input_returns_open_questions_not_invented_content() -> None:
     with tools_over(FakeJira()) as tools:
         payload = tools["draft_ticket"](issue_type="Bug", fields={"summary": "pool exhausted"})
