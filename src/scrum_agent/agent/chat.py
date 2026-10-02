@@ -11,6 +11,7 @@ the server actually executed, never from citations the model claims.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -26,12 +27,18 @@ from scrum_agent.agent.llm import ZaiAnthropicLlm
 from scrum_agent.agent.tools import make_tools
 from scrum_agent.agent.usage import UsageRecorder, UsageSnapshot
 from scrum_agent.config import Settings
+from scrum_agent.drafting import build_draft, default_templates, get_template
 from scrum_agent.jira.client import JiraClient
 from scrum_agent.search.service import SearchService
 
 _MAX_TURNS_NOTICE = (
     "This short-lived conversation has reached its turn limit. "
     "Start a new conversation to continue."
+)
+_EXPLICIT_STORY_REQUEST = re.compile(
+    r"\bdraft\b.*?\b(?:as|was)\s+(?:a\s+|an\s+)?(?P<role>.+?)\s+"
+    r"(?:i\s+)?want(?:\s+to)?\s+(?P<goal>.+)",
+    re.IGNORECASE,
 )
 
 
@@ -44,6 +51,49 @@ class TurnResult:
     usage: UsageSnapshot = field(default_factory=UsageSnapshot)
     turn_index: int = 0
     fetched_at: str = ""
+
+
+def _draft_answer(payload: dict) -> str:
+    """Render a tool-backed draft without letting the model discard proposals."""
+    rendered = payload.get("rendered")
+    if not isinstance(rendered, str):
+        return ""
+
+    if payload.get("requires_confirmation"):
+        return (
+            "Here is a proposed draft. Values marked `Proposal:` are editable defaults; "
+            "please accept or correct them.\n\n"
+            f"{rendered.rstrip()}"
+        )
+    if payload.get("ready"):
+        return f"Here is the completed draft:\n\n{rendered.rstrip()}"
+
+    questions = payload.get("open_questions")
+    if not isinstance(questions, list):
+        return f"Here is the draft:\n\n{rendered.rstrip()}"
+    question_lines = [
+        f"{index}. {item['question']}"
+        for index, item in enumerate(questions, start=1)
+        if isinstance(item, dict) and isinstance(item.get("question"), str)
+    ]
+    suffix = "\n\nTo complete it, please confirm:\n" + "\n".join(question_lines)
+    return f"Here is the draft:\n\n{rendered.rstrip()}{suffix}"
+
+
+def _explicit_story_draft(user_text: str) -> str | None:
+    """Handle an unambiguous user-story request without relying on tool choice."""
+    match = _EXPLICIT_STORY_REQUEST.search(user_text)
+    if match is None:
+        return None
+    role = match.group("role").strip(" ,.")
+    goal = match.group("goal").strip()
+    if not role or not goal:
+        return None
+    draft = build_draft(
+        get_template(default_templates(), "Story"),
+        {"role": role, "goal": goal},
+    )
+    return _draft_answer(draft)
 
 
 def build_agent(
@@ -129,6 +179,12 @@ class ChatService:
         self._turn_counts[session_id] = turn_index
         if turn_index > self.MAX_TURNS:
             return TurnResult(answer=_MAX_TURNS_NOTICE, turn_index=turn_index)
+        if draft := _explicit_story_draft(text):
+            return TurnResult(
+                answer=draft,
+                turn_index=turn_index,
+                fetched_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            )
 
         if (
             await self._sessions.get_session(
@@ -144,6 +200,7 @@ class ChatService:
         answer_parts: list[str] = []
         sources: list[dict] = []
         fetched_at = ""
+        draft_payload: dict | None = None
         async for event in self._runner.run_async(
             user_id=self.USER_ID,
             session_id=session_id,
@@ -157,13 +214,16 @@ class ChatService:
                     sources.extend(payload.get("sources") or [])
                     if payload.get("ok") and payload.get("fetched_at"):
                         fetched_at = payload["fetched_at"]
+                    if payload.get("ok") and payload.get("tool") == "draft_ticket":
+                        draft_payload = payload
 
         deduplicated: list[dict] = []
         for source in sources:
             if source not in deduplicated:
                 deduplicated.append(source)
+        answer = _draft_answer(draft_payload) if draft_payload is not None else ""
         return TurnResult(
-            answer="\n".join(part for part in answer_parts if part).strip(),
+            answer=answer or "\n".join(part for part in answer_parts if part).strip(),
             sources=tuple(deduplicated),
             usage=self.usage.delta_since(session_id, before),
             turn_index=turn_index,

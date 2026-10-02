@@ -56,8 +56,8 @@ def test_story_complete_example_is_ready_with_no_open_questions() -> None:
     assert draft["open_questions"] == []
 
 
-def test_story_incomplete_example_asks_instead_of_inventing() -> None:
-    """Mirrors docs/samples/story.example.md: no acceptance criteria, no estimate."""
+def test_story_incomplete_example_adds_proposals_pending_confirmation() -> None:
+    """A Story with its actor and goal gets editable agile-standard defaults."""
     template = get_template(default_templates(), "Story")
     draft = build_draft(
         template,
@@ -68,14 +68,14 @@ def test_story_incomplete_example_asks_instead_of_inventing() -> None:
         },
     )
     assert draft["ready"] is False
-    assert "acceptance_criteria" in draft["missing_team_policy_fields"]
-    assert "scope" in draft["missing_team_policy_fields"]
-    question_keys = {q["key"] for q in draft["open_questions"]}
-    assert "acceptance_criteria" in question_keys
-    # No invented acceptance criteria text anywhere in the rendered draft.
+    assert draft["missing_team_policy_fields"] == []
+    assert draft["open_questions"] == []
+    assert draft["proposed_fields"] == ["scope", "acceptance_criteria"]
+    assert draft["requires_confirmation"] is True
     acceptance_section = next(s for s in draft["sections"] if s["key"] == "acceptance_criteria")
-    assert acceptance_section["value"] is None
-    assert "missing" in draft["rendered"].lower()
+    assert acceptance_section["proposed"] is True
+    assert acceptance_section["value"] is not None
+    assert "Proposal:" in draft["rendered"]
 
 
 # -- Bug: one complete, one incomplete example -------------------------------

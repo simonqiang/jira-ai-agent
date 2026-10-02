@@ -37,50 +37,56 @@ No phase includes bulk writes, issue deletion, sprint administration, autonomous
 
 ## Review focus
 
-| Failure mode from the review | Owning week and required check |
-|---|---|
-| Done-before-start, reopening and closure-time rollover distort completion | Week 1 defines the rules; Week 6 checks event fixtures and one manually reviewed sprint. |
-| Missed polling windows and lagging search create false completeness | Week 4 checks recovery/checkpoints; Week 6 prevents an incomplete report from becoming final. |
-| Revoked access remains visible in history, exports or model context | Week 2 establishes checks; Weeks 3, 5 and 10 exercise chat, report and retrieval paths. |
-| Board filters span projects or project types differ | Week 1 records supported configuration; Week 2 tests the actual board scope. |
-| No-match queries or missing ticket details cause invented answers | Week 3 checks abstention; Week 7 checks questions instead of invented requirements; Week 12 reruns both. |
-| Untrusted issue text is injected into exports or rendered reports (spreadsheet formulas, markup) | Week 5 sanitizes and tests exports; Week 12 reruns the checks. |
-| Report generation blocks the conversation and times out | Week 5 makes report generation asynchronous with a job handle and status tool. |
-| A timed-out create leaves an unknown duplicate ticket | Week 8 writes a correlation marker and reconciles by search before declaring unknown. |
-| Collector credentials expire silently | Week 1 records the token-versus-3LO decision; Week 4 monitors credential expiry as a collection-freshness alarm. |
-| A stopped PC creates collection gaps | Reports record freshness and gaps; scheduled polling is the only pilot synchronization mechanism. |
+
+| Failure mode from the review                                                                     | Owning week and required check                                                                                   |
+| ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| Done-before-start, reopening and closure-time rollover distort completion                        | Week 1 defines the rules; Week 6 checks event fixtures and one manually reviewed sprint.                         |
+| Missed polling windows and lagging search create false completeness                              | Week 4 checks recovery/checkpoints; Week 6 prevents an incomplete report from becoming final.                    |
+| Revoked access remains visible in history, exports or model context                              | Week 2 establishes checks; Weeks 3, 5 and 10 exercise chat, report and retrieval paths.                          |
+| Board filters span projects or project types differ                                              | Week 1 records supported configuration; Week 2 tests the actual board scope.                                     |
+| No-match queries or missing ticket details cause invented answers                                | Week 3 checks abstention; Week 7 checks questions instead of invented requirements; Week 12 reruns both.         |
+| Untrusted issue text is injected into exports or rendered reports (spreadsheet formulas, markup) | Week 5 sanitizes and tests exports; Week 12 reruns the checks.                                                   |
+| Report generation blocks the conversation and times out                                          | Week 5 makes report generation asynchronous with a job handle and status tool.                                   |
+| A timed-out create leaves an unknown duplicate ticket                                            | Week 8 writes a correlation marker and reconciles by search before declaring unknown.                            |
+| Collector credentials expire silently                                                            | Week 1 records the token-versus-3LO decision; Week 4 monitors credential expiry as a collection-freshness alarm. |
+| A stopped PC creates collection gaps                                                             | Reports record freshness and gaps; scheduled polling is the only pilot synchronization mechanism.                |
+
 
 ## Phase overview
 
-| Phase | Weeks | Outcome at phase exit |
-|---|---|---|
-| 1. Foundation and useful search | 1–3 | Ask questions about your selected board and receive authorized Jira evidence. |
-| 2. Reliable sprint reporting | 4–6 | Generate current and evidence-supported historical reports with clear freshness and limitations. |
-| 3. Ticket preparation and controlled changes | 7–9 | Draft, review, create and update individual tickets using your team's rules. |
-| 4. Semantic search and personal pilot | 10–12 | Find related work and use the integrated assistant in daily Scrum Master work. |
+
+| Phase                                        | Weeks | Outcome at phase exit                                                                            |
+| -------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------ |
+| 1. Foundation and useful search              | 1–3   | Ask questions about your selected board and receive authorized Jira evidence.                    |
+| 2. Reliable sprint reporting                 | 4–6   | Generate current and evidence-supported historical reports with clear freshness and limitations. |
+| 3. Ticket preparation and controlled changes | 7–9   | Draft, review, create and update individual tickets using your team's rules.                     |
+| 4. Semantic search and personal pilot        | 10–12 | Find related work and use the integrated assistant in daily Scrum Master work.                   |
+
 
 ## Proposed module boundaries
 
 These are future paths to guide implementation; this planning task does not create application code. Design each week's exact interfaces and tests when that week starts.
 
-| Proposed location | Responsibility | Introduced |
-|---|---|---|
-| `src/scrum_agent/app.py`, `config.py` | Application startup and validated configuration | Week 1 |
-| `src/scrum_agent/jira/client.py`, `models.py` | Typed Jira reads, writes, pagination and field mapping | Week 1 onward |
-| `src/scrum_agent/auth/` | Trusted identity, permission checks and connection lifecycle | Week 2 onward |
-| `src/scrum_agent/search/`, `agent/` | Structured search, ADK tools and source-backed responses | Weeks 2–3 |
-| `src/scrum_agent/storage/`, `sync/`, `migrations/` | Snapshots, change history, ingestion jobs and checkpoints | Week 4 |
-| `src/scrum_agent/reports/` | Metric inputs, calculations, report narrative and exports | Weeks 5–6 |
-| `src/scrum_agent/tickets/`, `templates/` | Versioned team policy, draft validation, previews and execution | Weeks 7–9 |
-| `src/scrum_agent/retrieval/` | Chunking, embeddings, hybrid retrieval and citations | Weeks 10–11 |
-| `web/` | Small authenticated server-rendered UI (Jinja/HTMX): search, reports, drafts and approvals | Week 3 onward |
-| `tests/`, `evals/` | Behavioral tests and representative user tasks, grouped by feature | Every implementation week |
+
+| Proposed location                                  | Responsibilityplans                                                                        | Introduced                |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------- |
+| `src/scrum_agent/app.py`, `config.py`              | Application startup and validated configuration                                            | Week 1                    |
+| `src/scrum_agent/jira/client.py`, `models.py`      | Typed Jira reads, writes, pagination and field mapping                                     | Week 1 onward             |
+| `src/scrum_agent/auth/`                            | Trusted identity, permission checks and connection lifecycle                               | Week 2 onward             |
+| `src/scrum_agent/search/`, `agent/`                | Structured search, ADK tools and source-backed responses                                   | Weeks 2–3                 |
+| `src/scrum_agent/storage/`, `sync/`, `migrations/` | Snapshots, change history, ingestion jobs and checkpoints                                  | Week 4                    |
+| `src/scrum_agent/reports/`                         | Metric inputs, calculations, report narrative and exports                                  | Weeks 5–6                 |
+| `src/scrum_agent/tickets/`, `templates/`           | Versioned team policy, draft validation, previews and execution                            | Weeks 7–9                 |
+| `src/scrum_agent/retrieval/`                       | Chunking, embeddings, hybrid retrieval and citations                                       | Weeks 10–11               |
+| `web/`                                             | Small authenticated server-rendered UI (Jinja/HTMX): search, reports, drafts and approvals | Week 3 onward             |
+| `tests/`, `evals/`                                 | Behavioral tests and representative user tasks, grouped by feature                         | Every implementation week |
+
 
 ## Week 1 — Establish a working Jira foundation
 
 **Weekly goal:** “I can run the project and retrieve a known ticket and my board configuration.”
 
-- [x] Confirm Jira deployment, personal-pilot scope, board type, project scope, estimate field and timezone. If Data Center is selected, revise the adapter plan before continuing. *(Jira Cloud, project GACD, board 23031, filter scope, Story Points field and Asia/Hong_Kong timezone are recorded in ADR-0001. No hosting region or cloud budget is required for the PC-only pilot.)*
+- [x] Confirm Jira deployment, personal-pilot scope, board type, project scope, estimate field and timezone. If Data Center is selected, revise the adapter plan before continuing. *(Jira Cloud, project GACD, board 23031, filter scope, Story Points field and Asia/Hong\_Kong timezone are recorded in ADR-0001. No hosting region or cloud budget is required for the PC-only pilot.)*
 - [x] Decide pilot authentication: use a scoped personal API token (selectable 1–365 day expiry, central `api.atlassian.com/ex/jira/{cloudId}` endpoints) and monitor expiry. OAuth 3LO is out of scope for the PC-only pilot. *(Decided: scoped personal token — ADR-0001.)*
 - [ ] Collect three representative ticket examples and one manually prepared sprint report; record current report preparation time as a baseline. Anonymize the examples before they become fixtures. *(Examples drafted from real tickets in `docs/samples/` — pending pilot-user review; the manual sprint-report baseline and its minutes-spent figure remain to be filled in.)*
 - [x] Set up minimal CI (lint and tests) and pre-commit secret scanning; no credential ever enters source control. *(GitHub Actions + pre-commit with gitleaks.)*
@@ -185,7 +191,7 @@ These are future paths to guide implementation; this planning task does not crea
 
 - [x] Persist drafts, payload hashes, approval identity/expiry and execution records; provide a preview and authenticated approval action. *(`003_ticket_approvals.sql`: immutable payload jsonb + SHA-256 hash, UNIQUE correlation marker, approval identity and 15-minute expiry; `POST /tickets/drafts` returns the frozen payload as the preview and every endpoint gates on the `approval_user` session.)*
 - [x] Revalidate Jira permissions and field metadata before creating one issue; verify the created issue and return its link. *(`execute` runs live `validate_create_fields` (project pin + createmeta) before `create_issue`, then verifies by `get_issue` read-back and returns the issue key.)*
-- [x] Invalidate approval after draft edits. Check duplicate clicks, expired approval and application restart. *(`execute` re-checks `draft.payload_hash != approval.payload_hash`, prior executions are returned without re-creating (UNIQUE approval_id), expiry raises, and all state is durable Postgres — covered by `tests/test_ticketing.py`, `test_webapp.py` and the gated `test_storage.py` round-trip.)*
+- [x] Invalidate approval after draft edits. Check duplicate clicks, expired approval and application restart. *(`execute` re-checks `draft.payload_hash != approval.payload_hash`, prior executions are returned without re-creating (UNIQUE approval\_id), expiry raises, and all state is durable Postgres — covered by `tests/test_ticketing.py`, `test_webapp.py` and the gated `test_storage.py` round-trip.)*
 - [x] Handle ambiguous create timeouts: write a unique correlation marker (label or description footer) with every create, reconcile by searching for it, and mark the outcome unknown only when the marker cannot be found. Never automatically retry a potentially successful create. *(Marker goes into the description footer and labels; a failed create reconciles via `find_by_marker` JQL search ⇒ `succeeded/reconciled` or `outcome_unknown`; retries are forbidden by contract and tests.)*
 - [x] Exercise backup and restore of approval and execution records here, so Week 12 re-verifies rather than discovers. *(Drilled 2026-10-02: `pg_dump` of the pilot DB restored cleanly into a scratch database with identical table row counts, and sample draft/approval/execution/update-proposal rows round-tripped bit-for-bit; migrations 003/004 applied to the pilot DB first — see the [Week 8 note](notes/2026-10-01-week-8.md).)*
 
@@ -212,12 +218,12 @@ These are future paths to guide implementation; this planning task does not crea
 
 **Weekly goal:** “I can find related tickets even when they use different wording.”
 
-- [x] Enable pgvector and index authorized descriptions plus approved examples; record source revision, content hash and embedding model/configuration. Chunk Atlassian Document Format content by document nodes and index the summary as a separate chunk. *(`005_retrieval.sql` enables pgvector; `retrieval/chunking.py` walks ADF nodes — paragraphs, lists, tables, containers with their nearest heading — with the summary as its own chunk; every chunk row stores content hash, the issue's `updated` revision, source URL and embedding model, and queries never mix vector spaces across models. The index sources from the Week 4 snapshots, so collected in-scope examples flow in like any issue; no approximate index until a benchmark justifies one, per spec §7.)*
-- [x] Combine metadata-filtered vector retrieval with full-text retrieval; deduplicate issue results. *(`PgStorage.hybrid_search` fuses ranked pgvector cosine candidates with `websearch_to_tsquery` full-text over a generated tsvector via reciprocal-rank fusion (k=60), keeps the best chunk per issue with `DISTINCT ON`, and joins live snapshots so tombstoned issues are excluded; a similarity floor makes no-match requests abstain. In-memory fake mirrors the SQL semantics for unit tests; the gated round-trip covers real pgvector.)*
-- [x] Recheck current source access and revision before any retrieved text reaches the model, batching the access check into one user-scoped JQL query; invalidate obsolete/deleted chunks. *(`RetrievalService.search` rechecks the whole candidate set with one project-scoped `key in (...)` JQL through the Week 2 client: a drifted `updated` stamp is reported `stale`, a missing key `revoked_or_deleted`, and both delete the issue's chunks so the next `reindex` refreshes them — the excluded text never reaches the model or the output. `reindex` skips issues whose revision and model are unchanged and prunes tombstoned chunks.)*
-- [x] Evaluate paraphrases, exact identifiers, no-match requests, stale content and revoked-access cases against the structured-search baseline. *(`tests/test_retrieval.py` runs a 20-case development set over an 8-issue fixture corpus with a deterministic embedder: 10 paraphrases rank their target first, 2 identifier queries either hit the chunk mentioning the key or abstain (structured search resolves exact keys itself), 4 no-match queries abstain without a Jira call, and 2 stale + 2 revoked cases are excluded and invalidated. Real-model retrieval quality over live Jira remains the pilot user's Friday-demo check; this is the development checkpoint the plan defines, not the Week 11 quality gate.)*
+- [x] Enable pgvector and index authorized descriptions plus approved examples; record source revision, content hash and embedding model/configuration. Chunk Atlassian Document Format content by document nodes and index the summary as a separate chunk. *(`005_retrieval.sql` creates `issue_chunks` with `content_hash`, `source_updated` and `embedding_model`; queries always filter to a single model so vector spaces are never mixed. `retrieval/chunking.py` walks ADF document nodes — lists, tables, panels — each block carrying its nearest heading, with the summary indexed as its own chunk and over-long blocks split, never dropped.)*
+- [x] Combine metadata-filtered vector retrieval with full-text retrieval; deduplicate issue results. *(`retrieval/service.py` retrieves vector and full-text candidates fused by reciprocal rank fusion inside `PgStorage.hybrid_search`, keeping the best chunk per issue; exact-term queries fall back to full text and no-match requests abstain behind a similarity floor.)*
+- [x] Recheck current source access and revision before any retrieved text reaches the model, batching the access check into one user-scoped JQL query; invalidate obsolete/deleted chunks. *(`search()` rechecks the whole candidate set with one `key in (…)` JQL through the Week 2 client: drifted revision ⇒ `stale`, key not returned ⇒ `revoked_or_deleted`; both prune the issue's chunks and name the source without its text ever reaching the model or the output.)*
+- [x] Evaluate paraphrases, exact identifiers, no-match requests, stale content and revoked-access cases against the structured-search baseline. *(A 20-case development set — 10 paraphrases, 2 identifier, 4 no-match, 2 stale, 2 revoked — runs in `tests/test_retrieval.py` over an 8-issue corpus with a deterministic embedder; `tests/test_baseline.py` covers the structured-search comparison.)*
 
-**Friday demo:** Find related retry/payment issues from a differently worded query and open the cited sources. *(Implemented and regression-tested: `scrum-agent reindex` + `scrum-agent related --query …`, and the `find_related_tickets` chat tool; the live walkthrough with the real embedding endpoint remains for the pilot user.)*
+**Friday demo:** Find related retry/payment issues from a differently worded query and open the cited sources. *(Implemented and regression-tested via `scrum-agent related` and the chat agent's `find_related_tickets`; the live sandbox walkthrough remains for the pilot user — see the [Week 10 note](notes/2026-10-02-week-10.md).)*
 
 **Done when:** A 20-query development set demonstrates useful semantic matches; permission/revision checks pass. This is a development checkpoint, not the final quality gate.
 
@@ -258,18 +264,20 @@ and create a new delivery plan only if shared use becomes a requirement.
 
 ## Requirement coverage
 
-| Requirement | Delivery |
-|---|---|
-| FR-01 connection and context | Weeks 1–3 personal scope |
-| FR-02 natural-language Jira search | Weeks 2–3 |
-| FR-03 related work | Weeks 10–11 |
-| FR-04 selected-sprint reports | Weeks 5–6; real-history check depends on evidence availability |
-| FR-05 ticket drafts, including related examples | Week 7, enhanced in Week 11 |
-| FR-06 reviewed updates | Week 9 |
-| FR-07 approved execution | Weeks 8–9 |
-| FR-08 team standards | Week 7 versioned templates |
-| FR-09 provenance | Sources from Week 2; historical inputs Week 4; report provenance Weeks 5–6; write audit Weeks 8–9 |
-| FR-10 report exports | Week 5 |
+
+| Requirement                                     | Delivery                                                                                          |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| FR-01 connection and context                    | Weeks 1–3 personal scope                                                                          |
+| FR-02 natural-language Jira search              | Weeks 2–3                                                                                         |
+| FR-03 related work                              | Weeks 10–11                                                                                       |
+| FR-04 selected-sprint reports                   | Weeks 5–6; real-history check depends on evidence availability                                    |
+| FR-05 ticket drafts, including related examples | Week 7, enhanced in Week 11                                                                       |
+| FR-06 reviewed updates                          | Week 9                                                                                            |
+| FR-07 approved execution                        | Weeks 8–9                                                                                         |
+| FR-08 team standards                            | Week 7 versioned templates                                                                        |
+| FR-09 provenance                                | Sources from Week 2; historical inputs Week 4; report provenance Weeks 5–6; write audit Weeks 8–9 |
+| FR-10 report exports                            | Week 5                                                                                            |
+
 
 ## Weekly working routine
 
