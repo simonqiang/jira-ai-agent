@@ -373,6 +373,28 @@ async def test_explicit_story_request_bypasses_the_model_questionnaire() -> None
     await chat.aclose()
 
 
+async def test_explicit_story_request_includes_verified_related_work() -> None:
+    from tests.test_agent_tools import _retrieval_result, _StubRetrieval
+
+    retrieval = _StubRetrieval(_retrieval_result())
+    chat, _, fake = make_chat(retrieval=retrieval)
+
+    result = await chat.run_turn(
+        SESSION,
+        "Draft a ticket that was business user I want to GCDB receive "
+        "the last invoice update date from IDW via SFTP server",
+    )
+
+    assert "Related work" in result.answer
+    assert "PAY-1" in result.answer
+    assert list(result.sources) == [{"issue_key": "PAY-1"}]
+    assert retrieval.calls == [
+        ("GCDB receive the last invoice update date from IDW via SFTP server", 3)
+    ]
+    assert fake._cursor == 0
+    await chat.aclose()
+
+
 async def test_revoked_access_followup_never_reuses_restricted_context() -> None:
     jira = FakeJira()
     chat, _, _ = make_chat(

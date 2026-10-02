@@ -24,7 +24,8 @@ from httpx import BaseTransport
 
 from scrum_agent.agent.instructions import AGENT_INSTRUCTION
 from scrum_agent.agent.llm import ZaiAnthropicLlm
-from scrum_agent.agent.tools import make_tools
+from scrum_agent.agent.payloads import ok_draft_payload
+from scrum_agent.agent.tools import _attach_related_tickets, make_tools
 from scrum_agent.agent.usage import UsageRecorder, UsageSnapshot
 from scrum_agent.config import Settings
 from scrum_agent.drafting import build_draft, default_templates, get_template
@@ -102,7 +103,9 @@ def _draft_answer(payload: dict) -> str:
     return body + _related_work_section(payload)
 
 
-def _explicit_story_draft(user_text: str) -> str | None:
+def _explicit_story_draft(
+    user_text: str, retrieval=None, suggestions_enabled: bool = True
+) -> dict | None:
     """Handle an unambiguous user-story request without relying on tool choice."""
     match = _EXPLICIT_STORY_REQUEST.search(user_text)
     if match is None:
@@ -115,7 +118,9 @@ def _explicit_story_draft(user_text: str) -> str | None:
         get_template(default_templates(), "Story"),
         {"role": role, "goal": goal},
     )
-    return _draft_answer(draft)
+    return _attach_related_tickets(
+        ok_draft_payload("draft_ticket", draft), goal, retrieval, suggestions_enabled
+    )
 
 
 def build_agent(
@@ -175,6 +180,8 @@ class ChatService:
         self._service = SearchService(self._client)
         self.usage = UsageRecorder()
         self._jobs = jobs
+        self._retrieval = retrieval
+        self._suggestions_enabled = settings.suggestions_enabled
         self._agent = build_agent(
             self._service, llm, self.usage, jobs, retrieval, settings.suggestions_enabled
         )
@@ -208,11 +215,12 @@ class ChatService:
         self._turn_counts[session_id] = turn_index
         if turn_index > self.MAX_TURNS:
             return TurnResult(answer=_MAX_TURNS_NOTICE, turn_index=turn_index)
-        if draft := _explicit_story_draft(text):
+        if payload := _explicit_story_draft(text, self._retrieval, self._suggestions_enabled):
             return TurnResult(
-                answer=draft,
+                answer=_draft_answer(payload),
+                sources=tuple(payload["sources"]),
                 turn_index=turn_index,
-                fetched_at=datetime.now(UTC).isoformat(timespec="seconds"),
+                fetched_at=payload["fetched_at"],
             )
 
         if (

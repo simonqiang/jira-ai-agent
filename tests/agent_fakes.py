@@ -94,12 +94,15 @@ def make_chat(
     jira: FakeJira | None = None,
     steps: list[ScriptedStep] | None = None,
     settings: Settings | None = None,
+    retrieval=None,
 ) -> tuple[ChatService, FakeJira, FakeLlm]:
     """Compose a ChatService over the fixture Jira with a scripted model."""
     jira = jira if jira is not None else FakeJira()
     settings = settings if settings is not None else make_settings()
     fake = FakeLlm(model="fake-checked-model", steps=list(steps or []))
-    chat = ChatService(settings, llm=fake, transport=httpx.MockTransport(jira.handler))
+    chat = ChatService(
+        settings, llm=fake, transport=httpx.MockTransport(jira.handler), retrieval=retrieval
+    )
     return chat, jira, fake
 
 

@@ -71,6 +71,21 @@ def _suggestion_query(fields: dict[str, str] | None) -> str:
     return joined.strip()[:512]
 
 
+def _attach_related_tickets(
+    payload: dict, query: str, retrieval, suggestions_enabled: bool
+) -> dict:
+    """Attach verified related work without allowing retrieval to fail a draft."""
+    if not (suggestions_enabled and retrieval is not None and query):
+        return payload
+    try:
+        result = retrieval.search(query, top_k=3)
+    except Exception:
+        return payload
+    payload["related_tickets"] = [hit.model_dump() for hit in result.hits]
+    payload["sources"] = [{"issue_key": hit.issue_key} for hit in result.hits]
+    return payload
+
+
 def make_tools(
     service: SearchService, jobs=None, retrieval=None, suggestions_enabled: bool = True
 ) -> list[FunctionTool]:
@@ -262,17 +277,9 @@ def make_tools(
                 raise ValueError("fields must be a mapping of field key to text")
             draft = build_draft(template, fields)
             payload = ok_draft_payload("draft_ticket", draft)
-            if suggestions_enabled and retrieval is not None:
-                query = _suggestion_query(fields)
-                if query:
-                    try:
-                        result = retrieval.search(query, top_k=3)
-                    except Exception:
-                        result = None  # ponytail: suggestions never fail a draft
-                    if result is not None:
-                        payload["related_tickets"] = [hit.model_dump() for hit in result.hits]
-                        payload["sources"] = [{"issue_key": hit.issue_key} for hit in result.hits]
-            return payload
+            return _attach_related_tickets(
+                payload, _suggestion_query(fields), retrieval, suggestions_enabled
+            )
         except Exception as exc:
             return error_payload("draft_ticket", exc)
 
