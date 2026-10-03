@@ -361,8 +361,19 @@ abstention scored separately, and ≥80% duplicate-suggestion precision across
 
 ### Personal-pilot readiness (Week 12)
 
-Before using the integrated local pilot, run `scrum-agent preflight`; it reports
-safe configuration readiness without displaying secrets or writing Jira. Run
+One command brings the whole pilot up — Postgres (reused if something already
+listens on 5432), migrate, a Jira data refresh, preflight, then the server on
+`SCRUM_AGENT_WEB_PORT` (default 8741):
+
+```bash
+scripts/pilot-up.sh               # full start; Ctrl-C stops the server
+scripts/pilot-up.sh --no-collect  # skip the Jira data refresh (faster restarts)
+```
+
+Then open `http://127.0.0.1:<port>` and send one chat message to establish the
+approval session. The individual commands behind the script are documented
+below for manual runs: `scrum-agent preflight` reports safe configuration
+readiness without displaying secrets or writing Jira. Run
 `scrum-agent pilot-check` to execute fixed authorization, write-integrity,
 report, retrieval and operational test gates from this worktree. Set
 `SCRUM_AGENT_LOG_DIRECTORY` for rotating local logs; stderr logging remains on.
@@ -408,6 +419,7 @@ tests/                   unit tests against a mocked transport
 tests/checked_queries.py the Week 2 checked query set + fixture Jira server
 docs/decisions/          decision records (authentication, metric policy)
 docs/samples/            anonymized ticket-example and baseline templates
+scripts/pilot-up.sh      one-command local pilot start (DB, migrate, collect, preflight, serve)
 .github/workflows/       CI: lint, tests, secret scan
 ```
 

@@ -81,7 +81,10 @@ def _normalize(field: str, value: object) -> object:
             raise ValueError("due_date must be an ISO date (YYYY-MM-DD)") from None
         return value.strip()
     if field in _STRING_FIELDS:
-        return value or None
+        # Jira stores text panels as ADF paragraphs; reading them back strips
+        # trailing whitespace (jira_text ends with .strip()), so the proposal
+        # must expect exactly that stripped form or verify never matches.
+        return value.strip() or None
     raise ValueError(f"Unsupported update field {field!r}")
 
 

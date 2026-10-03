@@ -30,6 +30,7 @@ from scrum_agent.jira.models import (
     ChangelogEntry,
     Issue,
     Sprint,
+    adf_text,
 )
 
 _T = TypeVar("_T")
@@ -68,6 +69,19 @@ _ISSUE_DETAIL_FIELDS = [
 ]
 
 _SPRINT_STATES = ("future", "active", "closed")
+
+# Text-panel fields Jira Cloud v3 stores as Atlassian Document Format: a plain
+# string is rejected with HTTP 400. acceptance_criteria is customfield_10350
+# on the pilot site (see TicketUpdateService._UPDATABLE_FIELDS).
+_ADF_FIELDS = frozenset({"description", "customfield_10350"})
+
+
+def _as_jira_fields(fields: dict) -> dict:
+    """Convert plain-string text-panel values to ADF; pass everything else."""
+    return {
+        key: adf_text(value) if key in _ADF_FIELDS and isinstance(value, str) else value
+        for key, value in fields.items()
+    }
 
 
 class JiraClient:
@@ -227,7 +241,9 @@ class JiraClient:
 
     def create_issue(self, fields: dict) -> dict:
         """Create exactly one prevalidated issue; callers must not retry this call."""
-        payload = self._request("POST", "/rest/api/3/issue", json={"fields": fields})
+        payload = self._request(
+            "POST", "/rest/api/3/issue", json={"fields": _as_jira_fields(fields)}
+        )
         if not isinstance(payload, dict):
             raise JiraApiError("Jira returned invalid create response")
         key = payload.get("key")
@@ -252,7 +268,9 @@ class JiraClient:
         """Apply exactly the given field set to one issue; no other field moves."""
         self._check_issue_scope(issue_key)
         # Jira answers a field update with 204 No Content; anything else is a bug.
-        payload = self._request("PUT", f"/rest/api/3/issue/{issue_key}", json={"fields": fields})
+        payload = self._request(
+            "PUT", f"/rest/api/3/issue/{issue_key}", json={"fields": _as_jira_fields(fields)}
+        )
         if payload != {}:
             raise JiraApiError("Jira update returned an unexpected response body")
 

@@ -8,7 +8,7 @@ import json
 import httpx
 import pytest
 
-from scrum_agent.jira.client import JiraClient
+from scrum_agent.jira.client import JiraClient, _as_jira_fields
 from scrum_agent.jira.errors import (
     JiraApiError,
     JiraAuthError,
@@ -763,8 +763,8 @@ def test_create_issue_posts_exact_fields_and_returns_identity() -> None:
     payload = ticket_payload()
 
     assert client.create_issue(payload) == {"id": "10090", "key": "PAY-90"}
-    assert created == [payload]
-    assert json.loads(requests[0].content) == {"fields": payload}
+    assert created == [_as_jira_fields(payload)]
+    assert json.loads(requests[0].content) == {"fields": _as_jira_fields(payload)}
 
 
 def test_create_issue_rejects_response_without_identity() -> None:
@@ -853,7 +853,7 @@ def test_update_issue_puts_exact_fields_and_accepts_empty_response() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "PUT"
         assert request.url.path == "/rest/api/3/issue/PAY-3"
-        assert json.loads(request.content) == {"fields": fields}
+        assert json.loads(request.content) == {"fields": _as_jira_fields(fields)}
         return httpx.Response(204)
 
     client, requests = make_client(handler)
@@ -874,3 +874,47 @@ def test_update_issue_refuses_out_of_scope_key_before_http() -> None:
     with pytest.raises(JiraPermissionError):
         client.update_issue("OTHER-1", {"summary": "x"})
     assert requests == []
+
+
+# -- ADF text-panel fields (description etc.) --------------------------------------
+
+
+def test_adf_text_round_trips_through_jira_text() -> None:
+    from scrum_agent.jira.models import adf_text, jira_text
+
+    for text in (
+        "Single line",
+        "Two\nparagraphs",
+        "Blank\n\nline\n\nbetween",
+    ):
+        assert jira_text(adf_text(text)) == text.strip(), repr(text)
+
+
+def test_update_issue_converts_description_to_adf() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(204)
+
+    client, requests = make_client(handler)
+    client.update_issue("PAY-3", {"description": "First\n\nSecond", "summary": "Keep plain"})
+
+    body = json.loads(requests[0].content)
+    sent = body["fields"]
+    assert sent["summary"] == "Keep plain"  # plain string stays plain
+    assert sent["description"]["type"] == "doc"
+    assert [p["content"] for p in sent["description"]["content"]] == [
+        [{"type": "text", "text": "First"}],
+        [],
+        [{"type": "text", "text": "Second"}],
+    ]
+
+
+def test_create_issue_converts_description_to_adf() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return ok({"id": "1", "key": "PAY-9"})
+
+    client, requests = make_client(handler)
+    client.create_issue({"summary": "s", "description": "line one\nline two"})
+
+    sent = json.loads(requests[0].content)["fields"]
+    assert sent["description"]["type"] == "doc"
+    assert len(sent["description"]["content"]) == 2
