@@ -355,7 +355,8 @@ def make_tools(
 
         Freezes the exact diff (current value -> new value) as a local
         proposal and returns it with its proposal_id. Supported fields only:
-        summary, description, acceptance_criteria, labels, due_date. Show the
+        summary, description, acceptance_criteria, labels, due_date. labels
+        takes a comma-separated string (or list) of labels. Show the
         returned diff to the user and get their explicit confirmation before
         showing the server-rendered confirmation card; never add fields the
         user did not ask for.
@@ -368,6 +369,17 @@ def make_tools(
                 )
             if not isinstance(changes, dict) or not changes:
                 raise ValueError("changes must be a non-empty mapping of field to new value")
+            # The tool schema is string-valued (ADK coercion), so labels arrive
+            # as a string; the write service requires a list. Jira labels can
+            # never contain commas, so splitting is unambiguous.
+            changes = {
+                key: (
+                    [part.strip() for part in value.split(",") if part.strip()]
+                    if key == "labels" and isinstance(value, str)
+                    else value
+                )
+                for key, value in changes.items()
+            }
             proposal = updates.propose_update(
                 _text(issue_key, "issue_key"), changes, creator=pilot_user
             )

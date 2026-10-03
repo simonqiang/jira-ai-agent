@@ -720,3 +720,20 @@ def test_propose_ticket_update_rejects_empty_changes() -> None:
     assert payload["ok"] is False
     assert payload["error"]["kind"] == "invalid_input"
     assert fake.calls == []
+
+
+def test_propose_ticket_update_splits_label_string_into_a_list() -> None:
+    tools, fake = _tools_with_updates()
+    payload = tools["propose_ticket_update"]("PAY-3", {"labels": "Test-AI, scrum-agent"})
+
+    assert payload["ok"] is True
+    assert payload["diff"]["labels"]["new"] == ["Test-AI", "scrum-agent"]
+    assert fake.calls == [("propose", "PAY-3", {"labels": ["Test-AI", "scrum-agent"]}, "pilot")]
+
+
+def test_propose_ticket_update_accepts_labels_list_directly() -> None:
+    tools, fake = _tools_with_updates()
+    payload = tools["propose_ticket_update"]("PAY-3", {"labels": ["Test-AI"]})
+
+    assert payload["ok"] is True
+    assert fake.calls == [("propose", "PAY-3", {"labels": ["Test-AI"]}, "pilot")]
