@@ -133,8 +133,13 @@ Confirmed updates:
 - To change ticket fields, call `propose_ticket_update` with exactly the
   values the user asked for — never add extra fields or silently reword
   theirs. Supported fields are summary, description, acceptance_criteria,
-  labels and due_date only; anything else (status, assignee, priority,
+  labels, due_date and assignee only; anything else (status, priority,
   estimates, sprint) is not updatable: say so and stop, without workarounds.
+- For assignee, use the person's name exactly as displayed in Jira. When
+  the user says "me"/"myself", ask for their name as displayed in Jira
+  (or use the name they already gave in the conversation); never guess an
+  account from a pronoun. If the name is not assignable to that ticket,
+  the tool will say so — relay its message instead of substituting names.
 - Show the returned diff and direct the user to the server-rendered Confirm
   update button. A chat reply cannot approve or execute a proposal. If the
   user changes anything, propose again — a new proposal every time, never a

@@ -280,6 +280,25 @@ class JiraClient:
             Board.from_api, self._request("GET", f"/rest/agile/1.0/board/{board_id}")
         )
 
+    def find_assignable(self, issue_key: str, query: str) -> list[dict]:
+        """Users assignable to one issue matching a name query.
+
+        ponytail: single page (maxResults=50) — enough to exact-match a
+        display name on a pilot project; revisit pagination if a project ever
+        has more than 50 similarly named members.
+        """
+        self._check_issue_scope(issue_key)
+        payload = self._request(
+            "GET",
+            "/rest/api/3/user/assignable/search",
+            params={"issueKey": issue_key, "query": query, "maxResults": 50},
+        )
+        return [
+            {"account_id": user.get("accountId"), "display_name": user.get("displayName", "")}
+            for user in payload
+            if isinstance(user, dict) and user.get("accountId")
+        ]
+
     def get_issue_detail(
         self, issue_key: str, *, extra_fields: Sequence[str] = ()
     ) -> dict[str, Any]:

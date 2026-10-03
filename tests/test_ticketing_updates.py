@@ -38,6 +38,13 @@ class FakeUpdateJira:
     def get_issue(self, key: str) -> Issue:
         return self.issues[key]
 
+    def find_assignable(self, issue_key: str, query: str) -> list[dict]:
+        # Fixed fixture: only A. Developer is assignable; resolution echoes
+        # the name into the accountId so _apply can map it back.
+        if query.strip().lower() == "a. developer":
+            return [{"account_id": "acc:A. Developer", "display_name": "A. Developer"}]
+        return []
+
     def update_issue(self, key: str, fields: dict) -> None:
         self.updates.append((key, dict(fields)))
         if self.apply_writes:
@@ -52,10 +59,13 @@ class FakeUpdateJira:
     @staticmethod
     def _apply(issue: Issue, fields: dict) -> Issue:
         mapping = {"customfield_10350": "acceptance_criteria", "duedate": "due_date"}
-        changes = {
-            mapping.get(field_id, field_id): (tuple(value) if field_id == "labels" else value)
-            for field_id, value in fields.items()
-        }
+        changes = {}
+        for field_id, value in fields.items():
+            if field_id == "assignee" and isinstance(value, dict):
+                value = value["accountId"].split(":", 1)[1]  # accountId back to display name
+            changes[mapping.get(field_id, field_id)] = (
+                tuple(value) if field_id == "labels" else value
+            )
         return issue.model_copy(update=changes)
 
 
@@ -214,3 +224,47 @@ def test_execute_is_idempotent_and_enforces_approver_and_expiry() -> None:
     expired._now = lambda: now + timedelta(minutes=16)
     with pytest.raises(ValueError, match="expired"):
         expired.execute_update(stale_approval["id"], approver="local-pilot")
+
+
+# -- assignee support ----------------------------------------------------------------
+
+
+def test_assignee_proposal_resolves_and_applies_by_display_name() -> None:
+    tickets, storage, jira, proposal, approval = proposed_and_approved(assignee="A. Developer")
+    assert proposal["diff"]["assignee"] == {"old": None, "new": "A. Developer"}
+
+    result = tickets.execute_update(approval["id"], approver="local-pilot")
+    assert result["status"] == "succeeded"
+    assert result["verified"]["assignee"]["match"] is True
+    assert jira.issues["PAY-42"].assignee == "A. Developer"
+    # the PUT carried the resolved accountId, never the display name
+    sent = dict(jira.updates[0][1]["assignee"])
+    assert sent == {"accountId": "acc:A. Developer"}
+
+
+def test_assignee_with_unknown_name_is_rejected_before_any_write() -> None:
+    tickets, _storage, jira = service()
+    with pytest.raises(ValueError, match="No assignable user named 'Nobody'"):
+        tickets.propose_update("PAY-42", {"assignee": "Nobody"}, creator="local-pilot")
+    assert jira.updates == []
+
+
+def test_assignee_with_ambiguous_name_lists_candidates() -> None:
+    tickets, _storage, jira = service()
+    jira.find_assignable = lambda issue_key, query: [
+        {"account_id": "1", "display_name": query},
+        {"account_id": "2", "display_name": query},
+    ]
+    with pytest.raises(ValueError, match="Multiple assignable users"):
+        tickets.propose_update("PAY-42", {"assignee": "Chris"}, creator="local-pilot")
+
+
+def test_assignee_unresolvable_at_execution_consumes_nothing() -> None:
+    tickets, storage, jira = service()
+    proposal = tickets.propose_update("PAY-42", {"assignee": "A. Developer"}, creator="local-pilot")
+    approval = tickets.approve_update(proposal["id"], approver="local-pilot")
+    jira.find_assignable = lambda issue_key, query: []  # removed between approve and execute
+
+    with pytest.raises(ValueError, match="No assignable user"):
+        tickets.execute_update(approval["id"], approver="local-pilot")
+    assert jira.updates == []  # nothing written, no stuck executing record

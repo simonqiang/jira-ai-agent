@@ -355,8 +355,9 @@ def make_tools(
 
         Freezes the exact diff (current value -> new value) as a local
         proposal and returns it with its proposal_id. Supported fields only:
-        summary, description, acceptance_criteria, labels, due_date. labels
-        takes a comma-separated string (or list) of labels. Show the
+        summary, description, acceptance_criteria, labels, due_date, assignee.
+        labels takes a comma-separated string (or list) of labels; assignee
+        takes the person's name exactly as displayed in Jira. Show the
         returned diff to the user and get their explicit confirmation before
         showing the server-rendered confirmation card; never add fields the
         user did not ask for.
