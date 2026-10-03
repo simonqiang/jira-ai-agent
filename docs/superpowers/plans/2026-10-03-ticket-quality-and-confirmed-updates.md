@@ -4,7 +4,7 @@
 
 **Goal:** Let the chat agent review any ticket against the team's quality policy, and propose plus apply ticket updates from chat — each applied only after the user explicitly confirms the field-level diff.
 
-**Architecture:** A deterministic quality checker (spec §3's three checks: schema validity, mandatory team rules, advisory writing quality) runs over data `get_issue` already returns and is exposed as a read-only `review_ticket` tool. Confirmed updates reuse the existing Week 9 `TicketUpdateService` proposal → approval → execution chain unchanged: two new tools (`propose_ticket_update`, `execute_confirmed_update`) make the chat agent a client of that service. No new database tables, no new dependencies.
+**Architecture:** A deterministic quality checker runs over data `get_issue` already returns and is exposed as a read-only `review_ticket` tool. The chat agent can only prepare a proposal; the server renders its exact diff and a one-time confirmation token invokes the existing Week 9 `TicketUpdateService` proposal → approval → execution chain. No new database tables or dependencies are needed.
 
 **Tech Stack:** Python 3.11+, Google ADK function tools, Pydantic settings, pytest, Ruff.
 
@@ -14,8 +14,8 @@
 
 - Only the first two §3 checks are hard failures; advisory writing quality never blocks readiness and never becomes a numeric score — findings explain specific weaknesses.
 - Never invent business rules, reproduction steps, assignees or estimates; unknown mandatory details become questions for the user.
-- No Jira write may happen without the existing approval chain: proposal (local DB row), explicit user confirmation in the conversation, then approve+execute through `TicketUpdateService` with its freshness recheck and read-back verification.
-- The update tools are the only non-read-only agent tools; they may not accept raw JQL, credentials, bulk changes, status transitions or deletes — field updates only, via the existing service.
+- No Jira write may happen without the existing approval chain: proposal (local DB row), a server-rendered one-time confirmation control, then approve+execute through `TicketUpdateService` with its freshness recheck and read-back verification.
+- The agent may prepare field updates only; it has no approval or execution tool and may not accept raw JQL, credentials, bulk changes, status transitions or deletes.
 - Tests must not hit live Jira; fake the tool and storage layers (see `tests/agent_fakes.py`, `tests/storage_fakes.py`).
 - Use `PYTHONPATH=src` for all local test commands.
 
@@ -75,7 +75,7 @@
 
 **Interfaces:**
 - Consumes: `SearchService.get_issue` (already returns summary, description, acceptance criteria and ratings), `review_ticket_fields` from Task 1, template lookup from `scrum_agent.drafting`.
-- Produces: agent tool `review_ticket(issue_key: str, issue_type: str = "Story") -> dict` with a `ok_quality_payload` in `payloads.py`, a rendered chat section in `chat.py`, and one instruction paragraph pinning the §3 wording (mandatory vs advisory, no scores, suggestions never become requirements).
+- Produces: agent tool `review_ticket(issue_key: str) -> dict`, deriving the template from the fetched Jira issue type, with a `ok_quality_payload` in `payloads.py` and one instruction paragraph pinning the policy wording.
 
 - [x] **Step 1: Write failing tool, rendering and instruction tests**
 
@@ -114,7 +114,7 @@
 
 **Interfaces:**
 - Consumes: the existing `TicketUpdateService` (`propose_update`, `approve_update`, `execute_update`) and its `update_proposals`/`update_approvals`/`update_executions` audit rows — unchanged, no migration.
-- Produces: agent tools `propose_ticket_update(issue_key: str, changes: dict[str, str]) -> dict` (local proposal + field-level diff `current → new` + `proposal_id`; no Jira write) and `execute_confirmed_update(proposal_id: int) -> dict` (approve + execute; surfaces `succeeded`/`rejected_stale`/`verification_failed`/`failed` with per-field verification). `make_tools`/`build_agent`/`ChatService` accept an optional `updates` service; the web app passes the instance it already builds.
+- Produces: agent tool `propose_ticket_update(issue_key: str, changes: dict[str, str]) -> dict` (local proposal + field-level diff `current → new` + `proposal_id`; no Jira write). `ChatService` returns structured proposal data to the web app, which renders a one-time confirmation card and performs approve + execute itself.
 
 - [x] **Step 1: Write failing update-tool tests with fakes**
 
@@ -127,7 +127,7 @@
 
 - [x] **Step 3: Implement the tools, wiring, rendering and instruction guardrails**
 
-  Add both tools behind the optional `updates` service, thread it through `make_tools` → `build_agent` → `ChatService`, and pass the existing instance from the web app. Render the proposal as an explicit diff with the confirmation question, and the result with per-field outcomes. Instruction text: the agent must show the exact diff and ask for explicit confirmation before calling `execute_confirmed_update`, must report `rejected_stale`/`verification_failed` honestly, and must never widen a confirmed payload with extra fields. *(Done, with one wiring deviation: `ChatService` builds its own `TicketUpdateService` from `jobs` (or accepts an injected one for tests) because the web app constructs the chat service before it builds the route-level instance; both wrap the same storage/client, so `web/__init__.py` and `tests/test_webapp.py` needed no change.)*
+  Add proposal preparation behind the optional `updates` service and thread it through `make_tools` → `build_agent` → `ChatService`. Render the proposal's exact server-derived diff in a review card. The agent cannot approve or execute; a one-time token bound to the rendered card calls the server route, which reports per-field results. *(Follow-up correction: execution was removed from the agent tool set after review found the instruction-only confirmation boundary insufficient.)*
 
 - [x] **Step 4: Run the focused tests to verify GREEN**
 
@@ -153,7 +153,7 @@
 
 - [x] **Step 1: Update the README**
 
-  Add `review_ticket`, `propose_ticket_update` and `execute_confirmed_update` to the agent-tools documentation, with the confirmation rule stated in one sentence: nothing reaches Jira until the user explicitly confirms the shown diff.
+  Add `review_ticket` and `propose_ticket_update` to the agent-tools documentation, with the confirmation rule stated in one sentence: nothing reaches Jira until the user selects the server-rendered confirmation control for the shown diff.
 
 - [x] **Step 2: Record evidence in the Week 12 note**
 

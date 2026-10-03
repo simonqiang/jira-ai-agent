@@ -369,21 +369,19 @@ for the manual-live workflow, scratch-only restore drill and working-week log.
 
 ### Ticket quality review and confirmed updates (pilot backlog)
 
-`review_ticket(issue_key, issue_type)` checks an existing ticket against the
-team template deterministically: mandatory findings (required/team-policy
-sections missing) must be fixed, advisory suggestions never block, and there
-is no numeric quality score — gaps become questions, never invented content.
+`review_ticket(issue_key)` derives the template from the existing Jira ticket
+type and checks it deterministically. Mandatory findings are team-policy
+writing gaps, advisory suggestions never block, and there is no numeric quality
+score — gaps become questions, never invented content.
 
 With the local database configured, the chat agent can also update fields:
 `propose_ticket_update` freezes the exact field-level diff as a local proposal
-(touches nothing in Jira) and the agent shows it verbatim;
-`execute_confirmed_update` runs only after the user explicitly confirms that
-diff, reusing the Week 9 proposal → approval → execution chain with its
-freshness recheck and read-back verification (`succeeded`/`rejected_stale`/
-`verification_failed`/`failed`). Supported fields: summary, description,
-acceptance_criteria, labels, due_date. Nothing reaches Jira until the user
-explicitly confirms the shown diff; without the database the agent stays
-strictly read-only.
+(touches nothing in Jira) and the server renders its complete before/after
+values. The browser's one-time **Confirm update** control is the only chat
+execution path; it reuses the Week 9 proposal → approval → execution chain and
+its freshness recheck and read-back verification. Supported fields: summary,
+description, acceptance_criteria, labels, due_date. Without the database the
+agent stays strictly read-only.
 
 ## Layout
 

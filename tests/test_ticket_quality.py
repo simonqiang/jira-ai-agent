@@ -49,6 +49,14 @@ def test_missing_team_policy_field_is_a_hard_finding_with_question() -> None:
     assert asked["scope"] == _story().field("scope").question
 
 
+def test_template_required_fields_are_described_as_team_policy() -> None:
+    from scrum_agent.ticketing.quality import review_ticket_fields
+
+    review = review_ticket_fields({"goal": "download invoices"}, _story())
+    role = next(item for item in review["mandatory"] if item["key"] == "role")
+    assert role["finding"] == "Role is missing (team policy requires it)"
+
+
 def test_advisory_gap_never_blocks_readiness() -> None:
     from scrum_agent.ticketing.quality import review_ticket_fields
 
@@ -61,7 +69,11 @@ def test_advisory_gap_never_blocks_readiness() -> None:
     }
     review = review_ticket_fields(fields, _story())
     assert review["ready"] is True
-    assert {item["key"] for item in review["advisory"]} == {"context", "dependencies", "open_questions"}
+    assert {item["key"] for item in review["advisory"]} == {
+        "context",
+        "dependencies",
+        "open_questions",
+    }
     assert all(item["suggestion"] for item in review["advisory"])
 
 
@@ -112,7 +124,9 @@ def test_extract_template_fields_story_fallback_and_missing_sections() -> None:
         summary="Statement export",
         status="To Do",
         issue_type="Story",
-        description="As a finance user, I want to export statements so that month-end closes faster.",
+        description=(
+            "As a finance user, I want to export statements so that month-end closes faster."
+        ),
     )
     fields = extract_template_fields(issue, _story())
     assert fields["role"] is not None

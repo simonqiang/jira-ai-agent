@@ -129,6 +129,21 @@ body {
 
 .turn-usage { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
 
+.update-review,
+.update-result {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: #f4f8fc;
+}
+.update-review h3 { margin: 0; font-size: 15px; }
+.update-review p { margin: 4px 0 10px; color: var(--muted); }
+.update-review dl { margin: 0 0 12px; }
+.update-review dt { margin-top: 8px; font-weight: 650; }
+.update-review dd { margin: 2px 0 0; }
+.update-review pre { margin: 2px 0 6px; padding: 6px; overflow-x: auto; white-space: pre-wrap; background: var(--card); }
+
 /* thinking indicator: shown while the /chat request is in flight */
 .thinking {
   display: inline-flex;

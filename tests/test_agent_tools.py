@@ -652,7 +652,7 @@ def test_suggestions_disabled_draft_skips_retrieval() -> None:
 
 def test_review_ticket_reports_mandatory_and_advisory_findings() -> None:
     with tools_over(FakeJira()) as tools:
-        payload = tools["review_ticket"]("PAY-1", "Bug")
+        payload = tools["review_ticket"]("PAY-1")
     assert payload["ok"] is True
     assert payload["issue_key"] == "PAY-1"
     assert payload["issue_type"] == "Bug"
@@ -662,11 +662,16 @@ def test_review_ticket_reports_mandatory_and_advisory_findings() -> None:
     assert payload["sources"] == [{"issue_key": "PAY-1"}]
 
 
-def test_review_ticket_unknown_template_and_key() -> None:
+def test_review_ticket_uses_the_live_issue_type() -> None:
     with tools_over(FakeJira()) as tools:
-        bad_type = tools["review_ticket"]("PAY-1", "Epic")
-        bad_key = tools["review_ticket"]("PAY-999", "Bug")
-    assert bad_type["error"]["kind"] == "invalid_input"
+        payload = tools["review_ticket"]("PAY-1")
+    assert payload["ok"] is True
+    assert payload["issue_type"] == "Bug"
+
+
+def test_review_ticket_unknown_key() -> None:
+    with tools_over(FakeJira()) as tools:
+        bad_key = tools["review_ticket"]("PAY-999")
     assert bad_key["error"]["kind"] == "not_found"
 
 
@@ -703,28 +708,10 @@ def test_propose_ticket_update_freezes_diff_and_writes_nothing() -> None:
     assert fake.calls == [("propose", "PAY-3", {"summary": "New summary"}, "pilot")]
 
 
-def test_execute_confirmed_update_approves_then_executes_once() -> None:
+def test_agent_cannot_execute_a_ticket_update() -> None:
     tools, fake = _tools_with_updates()
-    payload = tools["execute_confirmed_update"](7)
-
-    assert payload["ok"] is True
-    assert payload["status"] == "succeeded"
-    assert payload["verified"]["summary"]["match"] is True
-    assert fake.calls == [("approve", 7, "pilot"), ("execute", 11, "pilot")]
-
-
-def test_execute_confirmed_update_reports_rejected_stale() -> None:
-    tools, _ = _tools_with_updates(
-        {
-            "status": "rejected_stale",
-            "execution_id": 4,
-            "issue_key": "PAY-3",
-            "verified": {"conflicts": {"summary": {"reviewed": "old", "now": "newer"}}},
-        }
-    )
-    payload = tools["execute_confirmed_update"](7)
-    assert payload["ok"] is True
-    assert payload["status"] == "rejected_stale"
+    assert "execute_confirmed_update" not in tools
+    assert fake.calls == []
 
 
 def test_propose_ticket_update_rejects_empty_changes() -> None:

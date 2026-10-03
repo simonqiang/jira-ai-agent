@@ -3,6 +3,23 @@
   <div class="answer"><span class="who">agent</span>
     {{ turn.answer | linkify_issue_keys }}
   </div>
+  {% if turn.update_proposal %}
+  <section class="update-review" aria-label="Review update to {{ turn.update_proposal.issue_key }}">
+    <h3>Review update to {{ turn.update_proposal.issue_key }}</h3>
+    <p>Jira will change only when you select Confirm update.</p>
+    <dl>
+      {% for field, change in turn.update_proposal.diff.items() %}
+      <dt>{{ field }}</dt>
+      <dd><strong>Before</strong><pre>{{ change.old }}</pre><strong>After</strong><pre>{{ change.new }}</pre></dd>
+      {% endfor %}
+    </dl>
+    <form hx-post="/tickets/update-proposals/{{ turn.update_proposal.id }}/confirm"
+          hx-target="this" hx-swap="outerHTML">
+      <input type="hidden" name="confirmation_token" value="{{ turn.confirmation_token }}">
+      <button type="submit">Confirm update to {{ turn.update_proposal.issue_key }}</button>
+    </form>
+  </section>
+  {% endif %}
   {% if turn.sources %}
   <details class="sources">
     <summary>Sources (server-verified, fetched {{ turn.fetched_at | localtime }})</summary>

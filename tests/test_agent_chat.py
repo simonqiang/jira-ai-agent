@@ -576,53 +576,26 @@ async def test_propose_turn_renders_the_exact_diff_and_stops() -> None:
 
     assert "nothing is written until you confirm" in result.answer
     assert "- summary: None -> 'New'" in result.answer
-    assert "confirm update 7" in result.answer
+    assert "Confirm update button" in result.answer
+    assert result.update_proposal is not None
+    assert result.update_proposal["id"] == 7
     assert updates.calls == [("propose", "PAY-3", {"summary": "New"}, "pilot")]
 
 
-async def test_execute_turn_reports_verified_fields() -> None:
+async def test_confirm_text_in_chat_does_not_execute_an_update() -> None:
     from tests.agent_fakes import FakeUpdateService
 
     updates = FakeUpdateService()
-    steps = [
-        ScriptedStep(tool_calls=(tool_call("execute_confirmed_update", proposal_id=7),)),
-        final("Done."),
-    ]
+    steps = [final("Use the confirmation card to apply the reviewed update.")]
     chat, _, _ = make_chat(steps=steps, updates=updates)
     result = await chat.run_turn(SESSION, "confirm update 7")
 
-    assert "succeeded" in result.answer
-    assert "- summary: verified in Jira" in result.answer
-    assert ("approve", 7, "pilot") in updates.calls
-    assert ("execute", 11, "pilot") in updates.calls
-
-
-async def test_rejected_stale_turn_says_nothing_was_written() -> None:
-    from tests.agent_fakes import FakeUpdateService
-
-    updates = FakeUpdateService(
-        {
-            "status": "rejected_stale",
-            "execution_id": 4,
-            "issue_key": "PAY-3",
-            "verified": {"conflicts": {"summary": {"reviewed": "old", "now": "newer"}}},
-        }
-    )
-    steps = [
-        ScriptedStep(tool_calls=(tool_call("execute_confirmed_update", proposal_id=7),)),
-        final("Stale."),
-    ]
-    chat, _, _ = make_chat(steps=steps, updates=updates)
-    result = await chat.run_turn(SESSION, "confirm update 7")
-
-    assert "rejected as stale" in result.answer
-    assert "nothing was written" in result.answer
+    assert "confirmation card" in result.answer
+    assert updates.calls == []
 
 
 def test_update_proposal_answer_skips_malformed_diff_entries() -> None:
-    from scrum_agent.agent.chat import _update_proposal_answer, _update_result_answer
+    from scrum_agent.agent.chat import _update_proposal_answer
 
     proposal = _update_proposal_answer({"issue_key": "PAY-3", "id": 7, "diff": {"summary": "junk"}})
-    assert "confirm update 7" in proposal
-    result = _update_result_answer({"issue_key": "PAY-3", "status": "succeeded", "verified": None})
-    assert "succeeded" in result
+    assert "Confirm update button" in proposal

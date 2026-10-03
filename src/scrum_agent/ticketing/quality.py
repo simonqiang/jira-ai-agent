@@ -83,8 +83,7 @@ def extract_template_fields(issue: Issue, template: TicketTemplate) -> dict[str,
                 if value is not None:
                     break
         if value is None and any(
-            marker in lowered_description
-            for marker in _STORY_FALLBACK_MARKERS.get(field.key, ())
+            marker in lowered_description for marker in _STORY_FALLBACK_MARKERS.get(field.key, ())
         ):
             value = issue.description  # stated as a sentence, not a section
         fields[field.key] = value
@@ -105,14 +104,11 @@ def review_ticket_fields(fields: dict[str, object], template: TicketTemplate) ->
         if _clean(fields.get(field.key)) is not None:
             continue
         if field.category in ("required_field", "team_policy"):
-            required = field.category == "required_field"
             mandatory.append(
                 {
                     "key": field.key,
                     "label": field.label,
-                    "finding": (
-                        f"{field.label} is missing ({'Jira schema requires it' if required else 'team policy requires it'})"
-                    ),
+                    "finding": f"{field.label} is missing (team policy requires it)",
                 }
             )
             questions.append({"key": field.key, "question": field.question})

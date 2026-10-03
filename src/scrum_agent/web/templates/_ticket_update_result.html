@@ -1,0 +1,10 @@
+<section class="update-result" role="status">
+  <strong>Update {{ result.status }}</strong> for {{ result.issue_key }}.
+  {% if result.status == "rejected_stale" %}
+  The ticket changed after review; no update was written.
+  {% else %}
+  {% for field, verification in result.verified.items() %}
+  <div>{{ field }}: {% if verification.match %}verified in Jira{% else %}not verified{% endif %}</div>
+  {% endfor %}
+  {% endif %}
+</section>

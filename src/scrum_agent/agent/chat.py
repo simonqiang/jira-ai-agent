@@ -52,6 +52,7 @@ class TurnResult:
     usage: UsageSnapshot = field(default_factory=UsageSnapshot)
     turn_index: int = 0
     fetched_at: str = ""
+    update_proposal: dict | None = None
 
 
 def _related_work_section(payload: dict) -> str:
@@ -134,33 +135,7 @@ def _update_proposal_answer(payload: dict) -> str:
         if isinstance(change, dict):
             lines.append(f"- {key}: {change.get('old')!r} -> {change.get('new')!r}")
     lines.append("")
-    lines.append(
-        f'To apply exactly these changes, reply "confirm update {payload.get("id")}"; '
-        "anything else leaves the ticket untouched."
-    )
-    return "\n".join(lines)
-
-
-def _update_result_answer(payload: dict) -> str:
-    """Render the execution outcome with per-field verification."""
-    status = payload.get("status")
-    if status == "rejected_stale":
-        return (
-            f"Update for {payload.get('issue_key')}: rejected as stale.\n"
-            "The issue changed since the diff was reviewed; nothing was written. "
-            "Propose the changes again to re-review."
-        )
-    lines = [f"Update for {payload.get('issue_key')}: {status}."]
-    for key, item in (payload.get("verified") or {}).items():
-        if isinstance(item, dict) and item.get("match"):
-            lines.append(f"- {key}: verified in Jira")
-        elif isinstance(item, dict):
-            lines.append(
-                f"- {key}: NOT verified (expected {item.get('expected')!r}, "
-                f"found {item.get('actual')!r})"
-            )
-    if status in ("verification_failed", "failed"):
-        lines.append("The ticket may not hold the reviewed values; check Jira before retrying.")
+    lines.append("Review the exact values below and use the Confirm update button to apply them.")
     return "\n".join(lines)
 
 
@@ -173,7 +148,7 @@ def build_agent(
     suggestions_enabled: bool = True,
     updates=None,
 ) -> LlmAgent:
-    """Assemble the pilot agent (read-only unless ``updates`` is provided)."""
+    """Assemble the pilot agent, which can prepare but never execute updates."""
     return LlmAgent(
         name="scrum_agent",
         model=llm,
@@ -308,10 +283,7 @@ class ChatService:
                         fetched_at = payload["fetched_at"]
                     if payload.get("ok") and payload.get("tool") == "draft_ticket":
                         draft_payload = payload
-                    if payload.get("ok") and payload.get("tool") in (
-                        "propose_ticket_update",
-                        "execute_confirmed_update",
-                    ):
+                    if payload.get("ok") and payload.get("tool") == "propose_ticket_update":
                         update_payload = payload
 
         deduplicated: list[dict] = []
@@ -321,12 +293,7 @@ class ChatService:
         if draft_payload is not None:
             answer = _draft_answer(draft_payload)
         elif update_payload is not None:
-            renderer = (
-                _update_proposal_answer
-                if update_payload["tool"] == "propose_ticket_update"
-                else _update_result_answer
-            )
-            answer = renderer(update_payload)
+            answer = _update_proposal_answer(update_payload)
         else:
             answer = ""
         return TurnResult(
@@ -335,6 +302,7 @@ class ChatService:
             usage=self.usage.delta_since(session_id, before),
             turn_index=turn_index,
             fetched_at=fetched_at or datetime.now(UTC).isoformat(timespec="seconds"),
+            update_proposal=update_payload,
         )
 
     async def reset(self, session_id: str) -> None:
