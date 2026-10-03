@@ -26,3 +26,12 @@ def test_quality_review_instruction_bans_scores_and_invented_content() -> None:
     assert "advisory suggestions" in AGENT_INSTRUCTION and "never block" in AGENT_INSTRUCTION
     assert "no numeric quality score" in AGENT_INSTRUCTION
     assert "fabricate the missing content" in AGENT_INSTRUCTION
+
+
+def test_confirmed_update_guardrails_are_pinned() -> None:
+    assert "`propose_ticket_update`" in AGENT_INSTRUCTION
+    assert "never add extra fields" in AGENT_INSTRUCTION
+    assert "Never call `execute_confirmed_update` before the user" in AGENT_INSTRUCTION
+    assert "a new\n  proposal every time" in AGENT_INSTRUCTION
+    assert "not to execute" in AGENT_INSTRUCTION
+    assert "never soften an unverified field into a success" in AGENT_INSTRUCTION

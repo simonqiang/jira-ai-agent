@@ -151,6 +151,28 @@ def ok_quality_payload(tool: str, review: dict) -> dict:
     }
 
 
+def ok_update_proposal_payload(tool: str, proposal: dict) -> dict:
+    """A frozen update diff; nothing is written to Jira at this point."""
+    return {
+        "ok": True,
+        "tool": tool,
+        **proposal,
+        "fetched_at": _now_iso(),
+        "sources": [{"issue_key": proposal["issue_key"]}],
+    }
+
+
+def ok_update_result_payload(tool: str, result: dict) -> dict:
+    """An executed update's honest outcome, with per-field verification."""
+    return {
+        "ok": True,
+        "tool": tool,
+        **result,
+        "fetched_at": _now_iso(),
+        "sources": [{"issue_key": result["issue_key"]}],
+    }
+
+
 def ok_retrieval_payload(tool: str, result: RetrievalResult) -> dict:
     """Serialize a ``RetrievalResult``: verified hits plus excluded sources.
 

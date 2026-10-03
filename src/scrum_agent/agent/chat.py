@@ -123,6 +123,47 @@ def _explicit_story_draft(
     )
 
 
+def _update_proposal_answer(payload: dict) -> str:
+    """Render the exact frozen diff so confirmation is about these bytes."""
+    diff = payload.get("diff") or {}
+    lines = [
+        f"Proposed update for {payload.get('issue_key')} — nothing is written until you confirm:",
+        "",
+    ]
+    for key, change in diff.items():
+        if isinstance(change, dict):
+            lines.append(f"- {key}: {change.get('old')!r} -> {change.get('new')!r}")
+    lines.append("")
+    lines.append(
+        f'To apply exactly these changes, reply "confirm update {payload.get("id")}"; '
+        "anything else leaves the ticket untouched."
+    )
+    return "\n".join(lines)
+
+
+def _update_result_answer(payload: dict) -> str:
+    """Render the execution outcome with per-field verification."""
+    status = payload.get("status")
+    if status == "rejected_stale":
+        return (
+            f"Update for {payload.get('issue_key')}: rejected as stale.\n"
+            "The issue changed since the diff was reviewed; nothing was written. "
+            "Propose the changes again to re-review."
+        )
+    lines = [f"Update for {payload.get('issue_key')}: {status}."]
+    for key, item in (payload.get("verified") or {}).items():
+        if isinstance(item, dict) and item.get("match"):
+            lines.append(f"- {key}: verified in Jira")
+        elif isinstance(item, dict):
+            lines.append(
+                f"- {key}: NOT verified (expected {item.get('expected')!r}, "
+                f"found {item.get('actual')!r})"
+            )
+    if status in ("verification_failed", "failed"):
+        lines.append("The ticket may not hold the reviewed values; check Jira before retrying.")
+    return "\n".join(lines)
+
+
 def build_agent(
     service: SearchService,
     llm: BaseLlm,
@@ -130,14 +171,15 @@ def build_agent(
     jobs=None,
     retrieval=None,
     suggestions_enabled: bool = True,
+    updates=None,
 ) -> LlmAgent:
-    """Assemble the read-only pilot agent."""
+    """Assemble the pilot agent (read-only unless ``updates`` is provided)."""
     return LlmAgent(
         name="scrum_agent",
         model=llm,
         description="Read-only Scrum Master Jira assistant for the pilot board.",
         instruction=AGENT_INSTRUCTION,
-        tools=make_tools(service, jobs, retrieval, suggestions_enabled),
+        tools=make_tools(service, jobs, retrieval, suggestions_enabled, updates),
         after_model_callback=usage.on_model_response,
     )
 
@@ -173,6 +215,7 @@ class ChatService:
         transport: BaseTransport | None = None,
         jobs=None,
         retrieval=None,
+        updates=None,
     ) -> None:
         if llm is None:
             llm = ZaiAnthropicLlm.from_settings(settings)
@@ -182,8 +225,19 @@ class ChatService:
         self._jobs = jobs
         self._retrieval = retrieval
         self._suggestions_enabled = settings.suggestions_enabled
+        if updates is None and jobs is not None:
+            from scrum_agent.ticketing.updates import TicketUpdateService
+
+            updates = TicketUpdateService(jobs.storage(), self._client)
+        self._updates = updates
         self._agent = build_agent(
-            self._service, llm, self.usage, jobs, retrieval, settings.suggestions_enabled
+            self._service,
+            llm,
+            self.usage,
+            jobs,
+            retrieval,
+            settings.suggestions_enabled,
+            self._updates,
         )
         self._sessions = build_session_service(settings)
         self._runner = Runner(
@@ -238,6 +292,7 @@ class ChatService:
         sources: list[dict] = []
         fetched_at = ""
         draft_payload: dict | None = None
+        update_payload: dict | None = None
         async for event in self._runner.run_async(
             user_id=self.USER_ID,
             session_id=session_id,
@@ -253,12 +308,27 @@ class ChatService:
                         fetched_at = payload["fetched_at"]
                     if payload.get("ok") and payload.get("tool") == "draft_ticket":
                         draft_payload = payload
+                    if payload.get("ok") and payload.get("tool") in (
+                        "propose_ticket_update",
+                        "execute_confirmed_update",
+                    ):
+                        update_payload = payload
 
         deduplicated: list[dict] = []
         for source in sources:
             if source not in deduplicated:
                 deduplicated.append(source)
-        answer = _draft_answer(draft_payload) if draft_payload is not None else ""
+        if draft_payload is not None:
+            answer = _draft_answer(draft_payload)
+        elif update_payload is not None:
+            renderer = (
+                _update_proposal_answer
+                if update_payload["tool"] == "propose_ticket_update"
+                else _update_result_answer
+            )
+            answer = renderer(update_payload)
+        else:
+            answer = ""
         return TurnResult(
             answer=answer or "\n".join(part for part in answer_parts if part).strip(),
             sources=tuple(deduplicated),

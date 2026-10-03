@@ -668,3 +668,68 @@ def test_review_ticket_unknown_template_and_key() -> None:
         bad_key = tools["review_ticket"]("PAY-999", "Bug")
     assert bad_type["error"]["kind"] == "invalid_input"
     assert bad_key["error"]["kind"] == "not_found"
+
+
+# -- confirmed updates (the only write path) ---------------------------------------
+
+
+def _tools_with_updates(execute_result: dict | None = None):
+    from tests.agent_fakes import FakeUpdateService, service_over
+
+    fake = FakeUpdateService(execute_result)
+    with service_over(FakeJira()) as probe:
+        tools = {tool.name: tool.func for tool in make_tools(probe.service, updates=fake)}
+    return tools, fake
+
+
+def test_update_tools_absent_without_the_updates_service() -> None:
+    from tests.agent_fakes import service_over
+
+    with service_over(FakeJira()) as probe:
+        names = {tool.name for tool in make_tools(probe.service)}
+    assert "propose_ticket_update" not in names
+    assert "execute_confirmed_update" not in names
+    assert READ_ONLY_TOOL_NAMES <= names
+
+
+def test_propose_ticket_update_freezes_diff_and_writes_nothing() -> None:
+    tools, fake = _tools_with_updates()
+    payload = tools["propose_ticket_update"]("PAY-3", {"summary": "New summary"})
+
+    assert payload["ok"] is True
+    assert payload["id"] == 7
+    assert payload["diff"]["summary"] == {"old": None, "new": "New summary"}
+    assert payload["sources"] == [{"issue_key": "PAY-3"}]
+    assert fake.calls == [("propose", "PAY-3", {"summary": "New summary"}, "pilot")]
+
+
+def test_execute_confirmed_update_approves_then_executes_once() -> None:
+    tools, fake = _tools_with_updates()
+    payload = tools["execute_confirmed_update"](7)
+
+    assert payload["ok"] is True
+    assert payload["status"] == "succeeded"
+    assert payload["verified"]["summary"]["match"] is True
+    assert fake.calls == [("approve", 7, "pilot"), ("execute", 11, "pilot")]
+
+
+def test_execute_confirmed_update_reports_rejected_stale() -> None:
+    tools, _ = _tools_with_updates(
+        {
+            "status": "rejected_stale",
+            "execution_id": 4,
+            "issue_key": "PAY-3",
+            "verified": {"conflicts": {"summary": {"reviewed": "old", "now": "newer"}}},
+        }
+    )
+    payload = tools["execute_confirmed_update"](7)
+    assert payload["ok"] is True
+    assert payload["status"] == "rejected_stale"
+
+
+def test_propose_ticket_update_rejects_empty_changes() -> None:
+    tools, fake = _tools_with_updates()
+    payload = tools["propose_ticket_update"]("PAY-3", {})
+    assert payload["ok"] is False
+    assert payload["error"]["kind"] == "invalid_input"
+    assert fake.calls == []

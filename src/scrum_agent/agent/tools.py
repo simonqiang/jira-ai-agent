@@ -33,6 +33,8 @@ from scrum_agent.agent.payloads import (
     ok_search_payload,
     ok_sprints_payload,
     ok_templates_payload,
+    ok_update_proposal_payload,
+    ok_update_result_payload,
 )
 from scrum_agent.drafting import build_draft, default_templates, get_template
 from scrum_agent.reports.jobs import job_view
@@ -91,12 +93,21 @@ def _attach_related_tickets(
 
 
 def make_tools(
-    service: SearchService, jobs=None, retrieval=None, suggestions_enabled: bool = True
+    service: SearchService,
+    jobs=None,
+    retrieval=None,
+    suggestions_enabled: bool = True,
+    updates=None,
 ) -> list[FunctionTool]:
     """Build the read-only tools bound to ``service`` (plus report ``jobs`` and
     semantic ``retrieval`` when the local database and embedding key exist).
     ``suggestions_enabled=False`` turns related-ticket suggestions off while
-    drafting itself stays available."""
+    drafting itself stays available. ``updates`` (the Week 9
+    ``TicketUpdateService``) additionally exposes the two confirmed-update
+    tools; without it the agent is strictly read-only."""
+
+    # Same constant as ChatService.USER_ID; kept literal to avoid an import cycle.
+    pilot_user = "pilot"
 
     def get_issue(issue_key: str) -> dict:
         """Fetch one issue by its exact key (for example PAY-3).
@@ -340,7 +351,55 @@ def make_tools(
         except Exception as exc:
             return error_payload("find_related_tickets", exc)
 
-    return [
+    def propose_ticket_update(issue_key: str, changes: dict[str, str]) -> dict:
+        """Propose field-level ticket changes; writes nothing to Jira.
+
+        Freezes the exact diff (current value -> new value) as a local
+        proposal and returns it with its proposal_id. Supported fields only:
+        summary, description, acceptance_criteria, labels, due_date. Show the
+        returned diff to the user and get their explicit confirmation before
+        calling execute_confirmed_update; never add fields the user did not
+        ask for.
+        """
+        try:
+            if updates is None:
+                raise ValueError(
+                    "Ticket updates need the local database "
+                    "(SCRUM_AGENT_DATABASE_URL); start it with `docker compose up -d`"
+                )
+            if not isinstance(changes, dict) or not changes:
+                raise ValueError("changes must be a non-empty mapping of field to new value")
+            proposal = updates.propose_update(
+                _text(issue_key, "issue_key"), changes, creator=pilot_user
+            )
+            return ok_update_proposal_payload("propose_ticket_update", proposal)
+        except Exception as exc:  # translated into a payload, never raised into ADK
+            return error_payload("propose_ticket_update", exc)
+
+    def execute_confirmed_update(proposal_id: int) -> dict:
+        """Approve and execute one confirmed update proposal, then verify.
+
+        Call only after the user explicitly confirmed the exact diff shown to
+        them for this proposal_id. The service re-reads the issue first:
+        rejected_stale means it changed since review and nothing was written.
+        succeeded/verification_failed/failed carry per-field verification —
+        report it honestly, never claim success the payload does not show.
+        """
+        try:
+            if updates is None:
+                raise ValueError(
+                    "Ticket updates need the local database "
+                    "(SCRUM_AGENT_DATABASE_URL); start it with `docker compose up -d`"
+                )
+            if not isinstance(proposal_id, int) or isinstance(proposal_id, bool):
+                raise ValueError("proposal_id must be the numeric id of a shown proposal")
+            approval = updates.approve_update(proposal_id, approver=pilot_user)
+            result = updates.execute_update(approval["id"], approver=pilot_user)
+            return ok_update_result_payload("execute_confirmed_update", result)
+        except Exception as exc:  # translated into a payload, never raised into ADK
+            return error_payload("execute_confirmed_update", exc)
+
+    tools = [
         FunctionTool(func=get_issue),
         FunctionTool(func=list_sprints),
         FunctionTool(func=search_issues),
@@ -352,3 +411,7 @@ def make_tools(
         FunctionTool(func=review_ticket),
         FunctionTool(func=find_related_tickets),
     ]
+    if updates is not None:
+        tools.append(FunctionTool(func=propose_ticket_update))
+        tools.append(FunctionTool(func=execute_confirmed_update))
+    return tools
