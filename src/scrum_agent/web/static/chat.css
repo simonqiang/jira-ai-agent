@@ -68,6 +68,44 @@ body {
 }
 
 .answer a { color: var(--accent); }
+.answer-table-wrap {
+  max-width: 100%;
+  margin: 0.75rem 0;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+}
+.answer-table {
+  width: 100%;
+  min-width: 560px;
+  border-collapse: collapse;
+  white-space: normal;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.answer-table th,
+.answer-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+.answer-table th {
+  background: #edf2f6;
+  color: #334454;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+.answer-table th:first-child,
+.answer-table td:first-child { white-space: nowrap; }
+.answer-table td:nth-child(2),
+.answer-table td:nth-child(3) { white-space: nowrap; }
+.answer-table tbody tr:last-child td { border-bottom: 0; }
+.answer-table tbody tr:hover { background: #f7f9fb; }
+.answer-table td:last-child { min-width: 280px; }
 
 .sources { margin-top: 8px; font-size: 13px; color: var(--muted); }
 .sources summary {
