@@ -53,6 +53,9 @@ All settings come from the environment (prefix `SCRUM_AGENT_`) or `.env`; see
 and formatted validation errors; raw upstream error bodies are not printed. Do not
 log auth headers, raw validation-error inputs, or environment contents.
 
+For the full token-scope, Jira-user, project-permission, and verification setup,
+see [Jira user and project setup](docs/guides/jira-user-and-project-setup.md).
+
 The probe prints ticket/board metadata and a source link for local inspection, but
 omits assignee names. **Do not paste its raw output into commits or shared logs**;
 anonymize summaries, names and links before recording evidence.
