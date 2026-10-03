@@ -554,3 +554,48 @@ async def test_aclose_awaits_database_session_close(monkeypatch: pytest.MonkeyPa
     chat, _, _ = make_chat(settings=settings)
     await chat.aclose()
     assert closed == [True]
+
+
+# -- confirmed updates through the agent -------------------------------------------
+
+
+async def test_propose_turn_renders_the_exact_diff_and_stops() -> None:
+    from tests.agent_fakes import FakeUpdateService
+
+    updates = FakeUpdateService()
+    steps = [
+        ScriptedStep(
+            tool_calls=(
+                tool_call("propose_ticket_update", issue_key="PAY-3", changes={"summary": "New"}),
+            )
+        ),
+        final("I proposed the update."),
+    ]
+    chat, _, _ = make_chat(steps=steps, updates=updates)
+    result = await chat.run_turn(SESSION, "update the summary of PAY-3")
+
+    assert "nothing is written until you confirm" in result.answer
+    assert "- summary: None -> 'New'" in result.answer
+    assert "Confirm update button" in result.answer
+    assert result.update_proposal is not None
+    assert result.update_proposal["id"] == 7
+    assert updates.calls == [("propose", "PAY-3", {"summary": "New"}, "pilot")]
+
+
+async def test_confirm_text_in_chat_does_not_execute_an_update() -> None:
+    from tests.agent_fakes import FakeUpdateService
+
+    updates = FakeUpdateService()
+    steps = [final("Use the confirmation card to apply the reviewed update.")]
+    chat, _, _ = make_chat(steps=steps, updates=updates)
+    result = await chat.run_turn(SESSION, "confirm update 7")
+
+    assert "confirmation card" in result.answer
+    assert updates.calls == []
+
+
+def test_update_proposal_answer_skips_malformed_diff_entries() -> None:
+    from scrum_agent.agent.chat import _update_proposal_answer
+
+    proposal = _update_proposal_answer({"issue_key": "PAY-3", "id": 7, "diff": {"summary": "junk"}})
+    assert "Confirm update button" in proposal

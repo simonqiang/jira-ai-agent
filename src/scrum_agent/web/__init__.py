@@ -55,6 +55,9 @@ class TurnView:
     sources: tuple[dict, ...]
     usage_text: str
     fetched_at: str
+    update_proposal: dict | None = None
+    confirmation_token: str | None = None
+    confirmation_used: bool = False
 
 
 def _usage_text(usage: UsageSnapshot) -> str:
@@ -87,7 +90,7 @@ def _loopback_ok(settings: Settings, request: Request) -> bool:
     return host_ok and origin_ok
 
 
-def create_app(settings: Settings, chat: ChatService, jobs=None) -> FastAPI:
+def create_app(settings: Settings, chat: ChatService, jobs=None, updates=None) -> FastAPI:
     """Build the chat web app bound to ``chat`` (and report ``jobs``)."""
 
     @asynccontextmanager
@@ -124,14 +127,15 @@ def create_app(settings: Settings, chat: ChatService, jobs=None) -> FastAPI:
 
     conversations: dict[str, list[TurnView]] = {}
     tickets = None
-    updates = None
     if jobs is not None:
         from scrum_agent.ticketing.approvals import TicketApprovalService
-        from scrum_agent.ticketing.updates import TicketUpdateService
 
         tickets = TicketApprovalService(
             jobs.storage(), chat.jira_client, project_key=settings.jira_project_key
         )
+    if updates is None and jobs is not None:
+        from scrum_agent.ticketing.updates import TicketUpdateService
+
         updates = TicketUpdateService(jobs.storage(), chat.jira_client)
 
     def approver(request: Request) -> str:
@@ -193,6 +197,8 @@ def create_app(settings: Settings, chat: ChatService, jobs=None) -> FastAPI:
             sources=result.sources,
             usage_text=_usage_text(result.usage),
             fetched_at=result.fetched_at,
+            update_proposal=result.update_proposal,
+            confirmation_token=(secrets.token_urlsafe(32) if result.update_proposal else None),
         )
         conversations[session_id].append(view)
         return templates.TemplateResponse(
@@ -316,6 +322,46 @@ def create_app(settings: Settings, chat: ChatService, jobs=None) -> FastAPI:
             return PlainTextResponse("Approval session is not authenticated.", status_code=403)
         except ValueError as exc:
             return PlainTextResponse(str(exc), status_code=400)
+
+    @app.post("/tickets/update-proposals/{proposal_id}/confirm", response_class=HTMLResponse)
+    async def confirm_ticket_update(
+        request: Request, proposal_id: int, confirmation_token: str = Form(...)
+    ) -> Response:
+        """Apply a diff only after the browser submits its rendered review card."""
+        if updates is None:
+            return PlainTextResponse("Ticket updates need the local database.", status_code=409)
+        session_id = request.cookies.get(_SESSION_COOKIE)
+        views = conversations.get(session_id or "", ())
+        view = next(
+            (
+                item
+                for item in views
+                if item.update_proposal and item.update_proposal.get("id") == proposal_id
+            ),
+            None,
+        )
+        if view is None or view.confirmation_token is None:
+            return PlainTextResponse(
+                "Update review not found in this conversation.", status_code=403
+            )
+        if not secrets.compare_digest(confirmation_token, view.confirmation_token):
+            return PlainTextResponse("Update confirmation is invalid.", status_code=403)
+        if view.confirmation_used:
+            return PlainTextResponse("This update review was already confirmed.", status_code=409)
+        view.confirmation_used = True
+        try:
+            approval = updates.approve_update(proposal_id, approver=approver(request))
+            result = updates.execute_update(approval["id"], approver=approver(request))
+        except PermissionError:
+            return PlainTextResponse("Approval session is not authenticated.", status_code=403)
+        except ValueError as exc:
+            return PlainTextResponse(str(exc), status_code=400)
+        return templates.TemplateResponse(
+            request=request,
+            name="_ticket_update_result.html",
+            context={"result": result},
+            status_code={"succeeded": 200, "rejected_stale": 409}.get(result["status"], 502),
+        )
 
     # -- reports (Weeks 5-6) ---------------------------------------------------
 

@@ -7,6 +7,7 @@ fixture Jira and a scripted model; no sockets are opened.
 from __future__ import annotations
 
 import json
+import re
 
 import httpx
 import pytest
@@ -60,6 +61,54 @@ def test_chat_turn_renders_linked_answer_sources_and_usage() -> None:
     assert "Sources" in response.text
     assert "2 model calls" in response.text  # tool use requires a second model response
     assert "prompt /" in response.text
+
+
+def test_ticket_update_needs_the_rendered_confirmation_token_before_execution() -> None:
+    from tests.agent_fakes import FakeUpdateService
+
+    updates = FakeUpdateService()
+    chat, _, _ = make_chat(
+        steps=[
+            ScriptedStep(
+                tool_calls=(
+                    tool_call(
+                        "propose_ticket_update",
+                        issue_key="PAY-3",
+                        changes={"summary": "New summary"},
+                    ),
+                )
+            ),
+            ScriptedStep(text="I prepared the update."),
+        ],
+        updates=updates,
+    )
+    app = create_app(make_settings(), chat, updates=updates)
+
+    with client_for(app) as client:
+        client.get("/")
+        card = client.post("/chat", data={"message": "update PAY-3"})
+        assert card.status_code == 200
+        assert "Confirm update to PAY-3" in card.text
+        assert updates.calls == [("propose", "PAY-3", {"summary": "New summary"}, "pilot")]
+
+        path = "/tickets/update-proposals/7/confirm"
+        assert client.post(path).status_code == 422
+        assert len(updates.calls) == 1
+
+        token = re.search(r'name="confirmation_token" value="([^"]+)"', card.text)
+        assert token is not None
+        confirmed = client.post(path, data={"confirmation_token": token.group(1)})
+        assert confirmed.status_code == 200
+        assert "succeeded" in confirmed.text
+        assert updates.calls == [
+            ("propose", "PAY-3", {"summary": "New summary"}, "pilot"),
+            ("approve", 7, "local-pilot"),
+            ("execute", 11, "local-pilot"),
+        ]
+
+        repeated = client.post(path, data={"confirmation_token": token.group(1)})
+        assert repeated.status_code == 409
+        assert len(updates.calls) == 3
 
 
 def test_chat_turn_escapes_markup_in_answers() -> None:

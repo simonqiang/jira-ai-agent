@@ -5,8 +5,10 @@ Four search tools (``get_issue``, ``list_sprints``, ``search_issues``,
 ``get_report``), which never block the conversation, and the two Week 7
 drafting tools (``list_draft_templates``/``draft_ticket``), which turn
 user-supplied text into an editable Story/Bug/Task draft and never write to
-Jira, and the Week 10 retrieval tool (``find_related_tickets``), which returns
-only chunks re-verified against live Jira. Inputs are plain JSON
+Jira, the Week 10 retrieval tool (``find_related_tickets``), which returns
+only chunks re-verified against live Jira, and the quality-review tool
+(``review_ticket``), a deterministic read-only check of an existing ticket
+against the team template. Inputs are plain JSON
 primitives (ADK's argument coercion swallows
 ``ValidationError`` for model classes, so ``IssueFilters`` is built inside each
 tool); outputs are structured payloads. No tool accepts raw JQL, credentials
@@ -26,15 +28,18 @@ from scrum_agent.agent.payloads import (
     normalize_states,
     ok_draft_payload,
     ok_issue_payload,
+    ok_quality_payload,
     ok_retrieval_payload,
     ok_search_payload,
     ok_sprints_payload,
     ok_templates_payload,
+    ok_update_proposal_payload,
 )
 from scrum_agent.drafting import build_draft, default_templates, get_template
 from scrum_agent.reports.jobs import job_view
 from scrum_agent.search.filters import IssueFilters
 from scrum_agent.search.service import SearchService
+from scrum_agent.ticketing.quality import extract_template_fields, review_ticket_fields
 
 
 def _clean(values: list[str] | None) -> tuple[str, ...]:
@@ -87,12 +92,21 @@ def _attach_related_tickets(
 
 
 def make_tools(
-    service: SearchService, jobs=None, retrieval=None, suggestions_enabled: bool = True
+    service: SearchService,
+    jobs=None,
+    retrieval=None,
+    suggestions_enabled: bool = True,
+    updates=None,
 ) -> list[FunctionTool]:
     """Build the read-only tools bound to ``service`` (plus report ``jobs`` and
     semantic ``retrieval`` when the local database and embedding key exist).
     ``suggestions_enabled=False`` turns related-ticket suggestions off while
-    drafting itself stays available."""
+    drafting itself stays available. ``updates`` (the Week 9
+    ``TicketUpdateService``) additionally exposes the two confirmed-update
+    tools; without it the agent is strictly read-only."""
+
+    # Same constant as ChatService.USER_ID; kept literal to avoid an import cycle.
+    pilot_user = "pilot"
 
     def get_issue(issue_key: str) -> dict:
         """Fetch one issue by its exact key (for example PAY-3).
@@ -283,6 +297,28 @@ def make_tools(
         except Exception as exc:
             return error_payload("draft_ticket", exc)
 
+    def review_ticket(issue_key: str) -> dict:
+        """Review an existing ticket against the team's quality template.
+
+        Fetches the issue once and checks it deterministically: mandatory
+        findings (required_field or team_policy sections missing) must be
+        fixed before refinement; advisory suggestions never block. Findings
+        name specific weaknesses — there is no numeric score and none may be
+        invented. issue_type must exactly match a template from
+        list_draft_templates (Story, Bug or Task). Makes no Jira changes.
+        """
+        try:
+            issue = service.get_issue(_text(issue_key, "issue_key"))
+            template = get_template(default_templates(), issue.issue_type)
+            fields = extract_template_fields(issue, template)
+            review = review_ticket_fields(fields, template)
+            payload = ok_quality_payload("review_ticket", review)
+            payload["issue_key"] = issue.key
+            payload["sources"] = [{"issue_key": issue.key}]
+            return payload
+        except Exception as exc:  # translated into a payload, never raised into ADK
+            return error_payload("review_ticket", exc)
+
     def find_related_tickets(query: str, top_k: int | None = None) -> dict:
         """Find project tickets related to a free-text description.
 
@@ -314,7 +350,32 @@ def make_tools(
         except Exception as exc:
             return error_payload("find_related_tickets", exc)
 
-    return [
+    def propose_ticket_update(issue_key: str, changes: dict[str, str]) -> dict:
+        """Propose field-level ticket changes; writes nothing to Jira.
+
+        Freezes the exact diff (current value -> new value) as a local
+        proposal and returns it with its proposal_id. Supported fields only:
+        summary, description, acceptance_criteria, labels, due_date. Show the
+        returned diff to the user and get their explicit confirmation before
+        showing the server-rendered confirmation card; never add fields the
+        user did not ask for.
+        """
+        try:
+            if updates is None:
+                raise ValueError(
+                    "Ticket updates need the local database "
+                    "(SCRUM_AGENT_DATABASE_URL); start it with `docker compose up -d`"
+                )
+            if not isinstance(changes, dict) or not changes:
+                raise ValueError("changes must be a non-empty mapping of field to new value")
+            proposal = updates.propose_update(
+                _text(issue_key, "issue_key"), changes, creator=pilot_user
+            )
+            return ok_update_proposal_payload("propose_ticket_update", proposal)
+        except Exception as exc:  # translated into a payload, never raised into ADK
+            return error_payload("propose_ticket_update", exc)
+
+    tools = [
         FunctionTool(func=get_issue),
         FunctionTool(func=list_sprints),
         FunctionTool(func=search_issues),
@@ -323,5 +384,9 @@ def make_tools(
         FunctionTool(func=get_report),
         FunctionTool(func=list_draft_templates),
         FunctionTool(func=draft_ticket),
+        FunctionTool(func=review_ticket),
         FunctionTool(func=find_related_tickets),
     ]
+    if updates is not None:
+        tools.append(FunctionTool(func=propose_ticket_update))
+    return tools

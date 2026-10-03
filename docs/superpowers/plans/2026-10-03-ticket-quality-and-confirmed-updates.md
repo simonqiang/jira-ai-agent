@@ -1,130 +1,184 @@
-# Ticket Quality and Confirmed Updates Implementation Plan
+# Ticket Quality Review and Confirmed Updates Implementation Plan
 
-**Goal:** Let the local pilot validate existing tickets against a versioned writing
-policy and apply exact reviewed improvements only after an explicit confirmation.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Spec:** [Ticket quality validation and confirmed updates](../specs/2026-10-03-ticket-quality-and-confirmed-updates-design.md)
+**Goal:** Let the chat agent review any ticket against the team's quality policy, and propose plus apply ticket updates from chat — each applied only after the user explicitly confirms the field-level diff.
 
-**Constraints:** Keep the existing loopback, single-user scope. Do not add a model
-write tool. Validation/preparation/revision/cancellation make no Jira write. Use
-`PYTHONPATH=src` for tests. Never place real issue text, credentials, prompts, or
-review payloads in committed fixtures or logs.
+**Architecture:** A deterministic quality checker runs over data `get_issue` already returns and is exposed as a read-only `review_ticket` tool. The chat agent can only prepare a proposal; the server renders its exact diff and a one-time confirmation token invokes the existing Week 9 `TicketUpdateService` proposal → approval → execution chain. No new database tables or dependencies are needed.
 
-## 1. Define the quality policy and result contracts
+**Tech Stack:** Python 3.11+, Google ADK function tools, Pydantic settings, pytest, Ruff.
 
-**Files:** Create `src/scrum_agent/quality/__init__.py`, `models.py`, `policy.py`;
-create `tests/test_ticket_quality_policy.py`.
+**Spec:** `docs/superpowers/specs/2026-09-27-scrum-master-agent-design.md` §3 (ticket quality policy), FR-06 (reviewed updates), FR-07 (approved execution).
 
-- [ ] Write failing tests for Story/Bug/Task rules, blank content, placeholders,
-  unsupported types, invalid rule IDs, and template-category mapping.
-- [ ] Implement immutable Pydantic findings/reports and the `quality-v1` policy.
-  Include Jira-required, team-policy, and advisory categories.
-- [ ] Implement deterministic checks. Treat clear non-heading prose as semantically
-  unknown instead of structurally missing.
-- [ ] Run `PYTHONPATH=src pytest tests/test_ticket_quality_policy.py -q`.
-- [ ] Commit `feat: define ticket quality policy`.
+## Global Constraints
 
-## 2. Add safe live-ticket validation
+- Only the first two §3 checks are hard failures; advisory writing quality never blocks readiness and never becomes a numeric score — findings explain specific weaknesses.
+- Never invent business rules, reproduction steps, assignees or estimates; unknown mandatory details become questions for the user.
+- No Jira write may happen without the existing approval chain: proposal (local DB row), a server-rendered one-time confirmation control, then approve+execute through `TicketUpdateService` with its freshness recheck and read-back verification.
+- The agent may prepare field updates only; it has no approval or execution tool and may not accept raw JQL, credentials, bulk changes, status transitions or deletes.
+- Tests must not hit live Jira; fake the tool and storage layers (see `tests/agent_fakes.py`, `tests/storage_fakes.py`).
+- Use `PYTHONPATH=src` for all local test commands.
 
-**Files:** Create `src/scrum_agent/quality/assessor.py`, `service.py`; modify
-`src/scrum_agent/agent/usage.py` if required; create `tests/test_ticket_quality.py`
-and `tests/test_quality_assessor.py`.
+## Review Focus
 
-- [ ] Write tests with anonymized supported ticket examples, non-English prose,
-  provider timeouts/malformed output, injected instructions, missing estimates, and
-  fabricated AI excerpts.
-- [ ] Implement `TicketQualityService.validate_ticket()` using existing scoped issue
-  reads and `QualityAssessor.assess()` with strict structured output. Enforce one
-  30-second/40,000-character call with no tools.
-- [ ] Derive readiness in Python and retain deterministic findings on AI failure.
-  Add transient conversation-bound report storage with 30-minute expiry.
-- [ ] Run `PYTHONPATH=src pytest tests/test_ticket_quality.py tests/test_quality_assessor.py -q`.
-- [ ] Commit `feat: validate ticket writing with evidence`.
+1. A proposal must apply exactly the confirmed diff or nothing: Task 3 tests that a ticket changed between propose and execute yields `rejected_stale`, and that execution without an approved proposal fails.
+2. Advisory quality findings must never flip `ready` to false; only schema/mandatory findings may — Task 1 pins this with a draft that has every mandatory section filled and advisory gaps only.
+3. The checker must not score or invent content: Task 1 asserts no numeric quality score appears and unknowns surface as questions, not as fabricated text.
+4. `propose_ticket_update` must not touch Jira: Task 3 asserts proposal creation performs only the service's local write and one authorized read, while execution goes through the service's existing audit path.
+5. Adding parameters to `make_tools`/`build_agent` must not break existing wiring: Task 3 keeps new parameters optional with `None` defaults and updates the agent fakes.
 
-## 3. Preserve exact Jira field values and rich documents
+---
 
-**Files:** Create `src/scrum_agent/jira/field_values.py`; modify
-`src/scrum_agent/jira/client.py`, `src/scrum_agent/ticketing/updates.py`,
-`tests/test_jira_client.py`, and `tests/test_ticketing_updates.py`; create
-`tests/test_field_values.py`.
+### Task 1: Deterministic ticket-quality checker
 
-- [ ] Write failing tests for ADF paragraphs/lists/tables/links/marks, plain strings,
-  labels, explicit clears, edit metadata, and visible-text-equal but raw-value-different
-  content.
-- [ ] Implement scoped edit metadata lookup, raw value extraction, exact Jira-payload
-  encoding, and safe template-section replacement.
-- [ ] Reject unknown fields before lookup; preserve untouched rich nodes; require a
-  fully disclosed whole-field replacement when a section cannot be located safely.
-- [ ] Run `PYTHONPATH=src pytest tests/test_field_values.py tests/test_jira_client.py tests/test_ticketing_updates.py -q`.
-- [ ] Commit `fix: preserve rich Jira fields in reviewed updates`.
+**Files:**
+- Create: `src/scrum_agent/ticketing/quality.py`
+- Create: `tests/test_ticket_quality.py`
 
-## 4. Make approval lifecycle durable and idempotent
+**Interfaces:**
+- Consumes: template metadata from `scrum_agent.drafting.templates` (`required_field`, `team_policy` and advisory sections — same vocabulary `build_draft` already uses).
+- Produces: `review_ticket_fields(fields: dict[str, object], template: TicketTemplate) -> dict` returning `{"schema": [...], "mandatory": [...], "advisory": [...], "ready": bool, "questions": [...]}` — one entry per finding naming the section and the specific weakness; `ready` is false only for schema or mandatory findings.
 
-**Files:** Create `src/scrum_agent/migrations/006_ticket_quality_reviews.sql`; modify
-`src/scrum_agent/storage/repository.py`, `src/scrum_agent/ticketing/updates.py`,
-`tests/storage_fakes.py`, `tests/test_storage.py`, and `tests/test_ticketing_updates.py`.
+- [x] **Step 1: Write failing checker tests in `tests/test_ticket_quality.py`**
 
-- [ ] Add failing tests for expiry, owner/conversation mismatch, cancellation,
-  superseding, altered hash, concurrent confirmation, multiple approvals, stale
-  values, pre-PUT failure, post-PUT timeout, and failed read-back.
-- [ ] Persist review binding, raw base values, exact Jira fields, payload provenance,
-  expiry, state, and a proposal-level unique execution claim. Backfill old executions
-  and require fresh review for pending legacy proposals.
-- [ ] Make approval/claim atomic and return the existing result on duplicate clicks.
-  Add `outcome_unknown`; reconcile interrupted work by reading only.
-- [ ] Run focused tests and gated disposable-PostgreSQL concurrency tests when
-  `SCRUM_AGENT_TEST_DATABASE_URL` is configured.
-- [ ] Commit `fix: enforce one confirmed execution per proposal`.
+  Cover: a complete ticket passes with empty findings and `ready is True`; an empty mandatory section produces a hard finding and `ready is False`; advisory-only gaps keep `ready is True`; missing unknown mandatory details appear in `questions`; and no finding text ever fabricates content or emits a numeric score.
 
-## 5. Add protected review cards and HTTP actions
+- [x] **Step 2: Run the focused tests to verify RED**
 
-**Files:** Create `src/scrum_agent/ticketing/review.py` and web review templates;
-modify `src/scrum_agent/web/__init__.py`, `tests/test_webapp.py`; create
-`tests/test_ticket_review.py`.
+  Run: `PYTHONPATH=src pytest tests/test_ticket_quality.py -q`
+  Expected: FAIL because `scrum_agent.ticketing.quality` does not exist.
 
-- [ ] Add failing tests for complete before/after values, explicit replacements,
-  revise/supersede, cancellation, direct JSON bypass, bad CSRF/review tokens, wrong
-  conversation, and execution/cancellation races.
-- [ ] Implement prepare/get/revise/cancel review service methods and browser routes.
-  Bind every ticket mutation endpoint to session CSRF and a review token.
-- [ ] Implement the single Confirm action as approve plus execute of the frozen hash.
-  All rejected actions must make zero Jira PUTs.
-- [ ] Run `PYTHONPATH=src pytest tests/test_ticket_review.py tests/test_webapp.py -q`.
-- [ ] Commit `feat: add protected ticket review confirmation`.
+- [x] **Step 3: Implement `review_ticket_fields` in `src/scrum_agent/ticketing/quality.py`**
 
-## 6. Connect validation and review to chat
+  Check each template section against the provided fields: empty/missing required or team-policy sections are mandatory findings, empty advisory sections are advisory findings with one-line explanations. Determine schema validity from the fields Jira already validated (`get_issue` payloads are authoritative; flag only what the checker can actually see). No scores, no invented text — unknowns become questions.
 
-**Files:** Modify `src/scrum_agent/agent/tools.py`, `instructions.py`, `chat.py`,
-`payloads.py`, `src/scrum_agent/app.py`, templates, CSS, and their corresponding
-agent/web tests.
+- [x] **Step 4: Run the focused tests to verify GREEN**
 
-- [ ] Add tests that confirm only `validate_ticket` and `prepare_ticket_update` are
-  registered, model-created IDs are ignored, chat “yes” causes no write, and cards
-  are resolved from trusted server records.
-- [ ] Wire the quality/review services with existing dependencies. Collect actual
-  tool artifacts in `TurnResult`; do not render model-provided action data.
-- [ ] Render findings and accessible review cards with Confirm, Revise, and Cancel
-  controls. Keep model output and ticket content escaped.
-- [ ] Run agent and web focused tests, then manually inspect fake-transport browser
-  flows at narrow and wide widths.
-- [ ] Commit `feat: review ticket improvements in chat`.
+  Run: `PYTHONPATH=src pytest tests/test_ticket_quality.py -q`
+  Expected: PASS.
 
-## 7. Verify the complete workflow and update operations documentation
+- [x] **Step 5: Commit the checker slice**
 
-**Files:** Create `tests/test_ticket_review_workflow.py`; modify `README.md`,
-`src/scrum_agent/pilot.py`, `tests/test_pilot.py`, and
-`docs/superpowers/runbooks/week-12-personal-pilot.md`.
+  ```bash
+  git add src/scrum_agent/ticketing/quality.py tests/test_ticket_quality.py
+  git commit -m "feat: add deterministic ticket quality checker"
+  ```
 
-- [ ] Add end-to-end fake-transport scenarios for validate → prepare → revise →
-  confirm → verified success, cancel, stale reviewed field, unrelated edit,
-  lost response reconciliation, outcome unknown, and double confirmation.
-- [ ] Document the live sandbox check that requires the displayed review-card action
-  and independent Jira inspection. Do not automate live Jira writes.
-- [ ] Run `PYTHONPATH=src pytest`, `ruff check .`, `ruff format --check .`, and
-  `PYTHONPATH=src scrum-agent pilot-check`. Clearly record skipped live/database checks.
-- [ ] Commit `docs: document confirmed ticket quality workflow`.
+### Task 2: Read-only `review_ticket` agent tool
 
-The feature is complete when the design acceptance criteria pass with fake transports,
-no negative scenario writes to Jira, every confirmed proposal issues at most one PUT,
-and the sandbox procedure is documented for manual pilot acceptance.
+**Files:**
+- Modify: `src/scrum_agent/agent/tools.py`
+- Modify: `src/scrum_agent/agent/payloads.py`
+- Modify: `src/scrum_agent/agent/chat.py`
+- Modify: `src/scrum_agent/agent/instructions.py`
+- Modify: `tests/test_agent_tools.py`, `tests/test_agent_chat.py`, `tests/test_agent_instructions.py`
 
+**Interfaces:**
+- Consumes: `SearchService.get_issue` (already returns summary, description, acceptance criteria and ratings), `review_ticket_fields` from Task 1, template lookup from `scrum_agent.drafting`.
+- Produces: agent tool `review_ticket(issue_key: str) -> dict`, deriving the template from the fetched Jira issue type, with a `ok_quality_payload` in `payloads.py` and one instruction paragraph pinning the policy wording.
+
+- [x] **Step 1: Write failing tool, rendering and instruction tests**
+
+  Tool test: `review_ticket` fetches the issue once via the (fake) search service and returns findings with `ready`; an unknown issue key surfaces the existing `not_found` error payload. Chat test: the quality payload renders mandatory and advisory findings in separate sections. Instruction test: the agent instruction names the three checks and forbids numeric scores.
+
+- [x] **Step 2: Run the focused tests to verify RED**
+
+  Run: `PYTHONPATH=src pytest tests/test_agent_tools.py tests/test_agent_chat.py tests/test_agent_instructions.py -q`
+  Expected: FAIL because the tool, payload and instruction text do not exist.
+
+- [x] **Step 3: Implement the tool, payload, rendering and instruction text**
+
+  Map the issue payload onto the chosen template's fields, run `review_ticket_fields`, wrap in a payload following the existing `ok_*_payload` conventions, render like `_draft_answer` does, and register the `FunctionTool` in `make_tools`. Keep the tool read-only: one authorized `get_issue`, no Jira writes. *(Done, with one deviation: review findings are presented via pinned instruction wording rather than a server-rendered chat section — the exact-bytes guarantee is only needed for update diffs, which are server-rendered in Task 3.)*
+
+- [x] **Step 4: Run the focused tests to verify GREEN**
+
+  Run: `PYTHONPATH=src pytest tests/test_agent_tools.py tests/test_agent_chat.py tests/test_agent_instructions.py -q`
+  Expected: PASS.
+
+- [x] **Step 5: Commit the review-tool slice**
+
+  ```bash
+  git add src/scrum_agent/agent/tools.py src/scrum_agent/agent/payloads.py src/scrum_agent/agent/chat.py src/scrum_agent/agent/instructions.py tests/test_agent_tools.py tests/test_agent_chat.py tests/test_agent_instructions.py
+  git commit -m "feat: add review_ticket quality tool to chat agent"
+  ```
+
+### Task 3: Confirmed updates in chat
+
+**Files:**
+- Modify: `src/scrum_agent/agent/tools.py`
+- Modify: `src/scrum_agent/agent/payloads.py`
+- Modify: `src/scrum_agent/agent/chat.py`
+- Modify: `src/scrum_agent/agent/instructions.py`
+- Modify: `src/scrum_agent/web/__init__.py`
+- Modify: `tests/agent_fakes.py`, `tests/test_agent_tools.py`, `tests/test_agent_chat.py`, `tests/test_agent_instructions.py`, `tests/test_webapp.py`
+
+**Interfaces:**
+- Consumes: the existing `TicketUpdateService` (`propose_update`, `approve_update`, `execute_update`) and its `update_proposals`/`update_approvals`/`update_executions` audit rows — unchanged, no migration.
+- Produces: agent tool `propose_ticket_update(issue_key: str, changes: dict[str, str]) -> dict` (local proposal + field-level diff `current → new` + `proposal_id`; no Jira write). `ChatService` returns structured proposal data to the web app, which renders a one-time confirmation card and performs approve + execute itself.
+
+- [x] **Step 1: Write failing update-tool tests with fakes**
+
+  Extend `tests/agent_fakes.py` with a fake update service. Assert: proposing returns the diff and `proposal_id` without any Jira write call; executing before approval fails; approve-then-execute succeeds and reports per-field verification; a stale proposal yields `rejected_stale`; `updates=None` produces a clear "ticket updates need the local database" error payload rather than a crash.
+
+- [x] **Step 2: Run the focused tests to verify RED**
+
+  Run: `PYTHONPATH=src pytest tests/test_agent_tools.py tests/test_agent_chat.py tests/test_agent_instructions.py tests/test_webapp.py -q`
+  Expected: FAIL because the update tools and wiring do not exist.
+
+- [x] **Step 3: Implement the tools, wiring, rendering and instruction guardrails**
+
+  Add proposal preparation behind the optional `updates` service and thread it through `make_tools` → `build_agent` → `ChatService`. Render the proposal's exact server-derived diff in a review card. The agent cannot approve or execute; a one-time token bound to the rendered card calls the server route, which reports per-field results. *(Follow-up correction: execution was removed from the agent tool set after review found the instruction-only confirmation boundary insufficient.)*
+
+- [x] **Step 4: Run the focused tests to verify GREEN**
+
+  Run: `PYTHONPATH=src pytest tests/test_agent_tools.py tests/test_agent_chat.py tests/test_agent_instructions.py tests/test_webapp.py tests/test_ticketing_updates.py -q`
+  Expected: PASS.
+
+- [x] **Step 5: Commit the confirmed-updates slice**
+
+  ```bash
+  git add src/scrum_agent/agent/tools.py src/scrum_agent/agent/payloads.py src/scrum_agent/agent/chat.py src/scrum_agent/agent/instructions.py src/scrum_agent/web/__init__.py tests/agent_fakes.py tests/test_agent_tools.py tests/test_agent_chat.py tests/test_agent_instructions.py tests/test_webapp.py
+  git commit -m "feat: add confirmed ticket updates to chat agent"
+  ```
+
+### Task 4: Documentation and final verification
+
+**Files:**
+- Modify: `README.md`
+- Modify: `docs/superpowers/notes/2026-10-03-week-12.md`
+
+**Interfaces:**
+- Consumes: all prior tasks.
+- Produces: documented agent tools and recorded verification evidence; no additional behavior.
+
+- [x] **Step 1: Update the README**
+
+  Add `review_ticket` and `propose_ticket_update` to the agent-tools documentation, with the confirmation rule stated in one sentence: nothing reaches Jira until the user selects the server-rendered confirmation control for the shown diff.
+
+- [x] **Step 2: Record evidence in the Week 12 note**
+
+  Note the pilot-backlog items addressed (ticket quality review, confirmed chat updates), which automated gates passed, and that live end-to-end confirmation against real Jira remains a manual pilot step.
+
+- [x] **Step 3: Run the complete automated suite from this worktree**
+
+  Run: `PYTHONPATH=src pytest -q`
+  Expected: PASS with no external Jira calls.
+
+- [x] **Step 4: Run static checks**
+
+  Run: `PYTHONPATH=src ruff check src tests && PYTHONPATH=src ruff format --check src tests`
+  Expected: `All checks passed!` *(Done with a caveat: `ruff check` passes and every file this plan touched is format-clean, but `ruff format --check` still fails on `pilot.py`, `web/linkify.py` and `tests/test_pilot.py` — pre-existing drift at HEAD from a09e4b9, not from this work; a standalone `style: format` commit remains open.)*
+
+- [x] **Step 5: Commit the documentation and evidence**
+
+  ```bash
+  git add README.md docs/superpowers/notes/2026-10-03-week-12.md
+  git commit -m "docs: document ticket quality review and confirmed updates"
+  ```
+
+## Self-review
+
+- **Spec coverage:** Task 1 implements §3's three-check policy with advisory/mandatory separation and no scores; Task 2 surfaces it read-only in chat; Tasks 3 implements FR-06/07 through the existing proposal → approval → execution chain with explicit in-chat confirmation, freshness recheck and read-back verification untouched.
+- **Type consistency:** Task 1 defines the checker Task 2 consumes; Task 3's optional `updates` parameter defaults to `None` everywhere so existing wiring and tests stay valid until the web app passes the service.
+- **Review focus:** Every listed risk is assigned to an explicit test: stale/failed execution (Task 3 Step 1), advisory never blocks (Task 1 Step 1), no scores or invented content (Task 1 Step 1), proposal writes nothing to Jira (Task 3 Step 1), optional-parameter backward compatibility (Task 3 Step 1).
+- **Scope:** No database migration, no new dependency, no bulk writes, status transitions, deletes or autonomous execution.

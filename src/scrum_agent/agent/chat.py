@@ -52,6 +52,7 @@ class TurnResult:
     usage: UsageSnapshot = field(default_factory=UsageSnapshot)
     turn_index: int = 0
     fetched_at: str = ""
+    update_proposal: dict | None = None
 
 
 def _related_work_section(payload: dict) -> str:
@@ -123,6 +124,21 @@ def _explicit_story_draft(
     )
 
 
+def _update_proposal_answer(payload: dict) -> str:
+    """Render the exact frozen diff so confirmation is about these bytes."""
+    diff = payload.get("diff") or {}
+    lines = [
+        f"Proposed update for {payload.get('issue_key')} — nothing is written until you confirm:",
+        "",
+    ]
+    for key, change in diff.items():
+        if isinstance(change, dict):
+            lines.append(f"- {key}: {change.get('old')!r} -> {change.get('new')!r}")
+    lines.append("")
+    lines.append("Review the exact values below and use the Confirm update button to apply them.")
+    return "\n".join(lines)
+
+
 def build_agent(
     service: SearchService,
     llm: BaseLlm,
@@ -130,14 +146,15 @@ def build_agent(
     jobs=None,
     retrieval=None,
     suggestions_enabled: bool = True,
+    updates=None,
 ) -> LlmAgent:
-    """Assemble the read-only pilot agent."""
+    """Assemble the pilot agent, which can prepare but never execute updates."""
     return LlmAgent(
         name="scrum_agent",
         model=llm,
         description="Read-only Scrum Master Jira assistant for the pilot board.",
         instruction=AGENT_INSTRUCTION,
-        tools=make_tools(service, jobs, retrieval, suggestions_enabled),
+        tools=make_tools(service, jobs, retrieval, suggestions_enabled, updates),
         after_model_callback=usage.on_model_response,
     )
 
@@ -173,6 +190,7 @@ class ChatService:
         transport: BaseTransport | None = None,
         jobs=None,
         retrieval=None,
+        updates=None,
     ) -> None:
         if llm is None:
             llm = ZaiAnthropicLlm.from_settings(settings)
@@ -182,8 +200,19 @@ class ChatService:
         self._jobs = jobs
         self._retrieval = retrieval
         self._suggestions_enabled = settings.suggestions_enabled
+        if updates is None and jobs is not None:
+            from scrum_agent.ticketing.updates import TicketUpdateService
+
+            updates = TicketUpdateService(jobs.storage(), self._client)
+        self._updates = updates
         self._agent = build_agent(
-            self._service, llm, self.usage, jobs, retrieval, settings.suggestions_enabled
+            self._service,
+            llm,
+            self.usage,
+            jobs,
+            retrieval,
+            settings.suggestions_enabled,
+            self._updates,
         )
         self._sessions = build_session_service(settings)
         self._runner = Runner(
@@ -238,6 +267,7 @@ class ChatService:
         sources: list[dict] = []
         fetched_at = ""
         draft_payload: dict | None = None
+        update_payload: dict | None = None
         async for event in self._runner.run_async(
             user_id=self.USER_ID,
             session_id=session_id,
@@ -253,18 +283,26 @@ class ChatService:
                         fetched_at = payload["fetched_at"]
                     if payload.get("ok") and payload.get("tool") == "draft_ticket":
                         draft_payload = payload
+                    if payload.get("ok") and payload.get("tool") == "propose_ticket_update":
+                        update_payload = payload
 
         deduplicated: list[dict] = []
         for source in sources:
             if source not in deduplicated:
                 deduplicated.append(source)
-        answer = _draft_answer(draft_payload) if draft_payload is not None else ""
+        if draft_payload is not None:
+            answer = _draft_answer(draft_payload)
+        elif update_payload is not None:
+            answer = _update_proposal_answer(update_payload)
+        else:
+            answer = ""
         return TurnResult(
             answer=answer or "\n".join(part for part in answer_parts if part).strip(),
             sources=tuple(deduplicated),
             usage=self.usage.delta_since(session_id, before),
             turn_index=turn_index,
             fetched_at=fetched_at or datetime.now(UTC).isoformat(timespec="seconds"),
+            update_proposal=update_payload,
         )
 
     async def reset(self, session_id: str) -> None:

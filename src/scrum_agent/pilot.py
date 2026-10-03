@@ -114,7 +114,7 @@ def run_pilot_checks(*, root: Path) -> int:
         os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else ""
     )
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", * _PILOT_GATE_TESTS],
+        [sys.executable, "-m", "pytest", *_PILOT_GATE_TESTS],
         cwd=root,
         env=environment,
         check=False,

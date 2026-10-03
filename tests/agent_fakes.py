@@ -89,19 +89,56 @@ class FakeLlm(BaseLlm):
         )
 
 
+class FakeUpdateService:
+    """Records service calls with scripted outcomes for the update tools."""
+
+    def __init__(self, execute_result: dict | None = None) -> None:
+        self.calls: list[tuple] = []
+        self._execute_result = execute_result or {
+            "status": "succeeded",
+            "execution_id": 3,
+            "issue_key": "PAY-3",
+            "verified": {"summary": {"expected": "New", "actual": "New", "match": True}},
+        }
+
+    def propose_update(self, issue_key: str, changes: dict, *, creator: str) -> dict:
+        self.calls.append(("propose", issue_key, dict(changes), creator))
+        return {
+            "id": 7,
+            "issue_key": issue_key,
+            "summary": "Statement export",
+            "diff": {key: {"old": None, "new": value} for key, value in changes.items()},
+            "unchanged_fields_untouched": True,
+            "payload_hash": "h",
+        }
+
+    def approve_update(self, proposal_id: int, *, approver: str) -> dict:
+        self.calls.append(("approve", proposal_id, approver))
+        return {"id": 11, "expires_at": "2026-10-03T18:00:00+00:00"}
+
+    def execute_update(self, approval_id: int, *, approver: str) -> dict:
+        self.calls.append(("execute", approval_id, approver))
+        return dict(self._execute_result)
+
+
 def make_chat(
     *,
     jira: FakeJira | None = None,
     steps: list[ScriptedStep] | None = None,
     settings: Settings | None = None,
     retrieval=None,
+    updates=None,
 ) -> tuple[ChatService, FakeJira, FakeLlm]:
     """Compose a ChatService over the fixture Jira with a scripted model."""
     jira = jira if jira is not None else FakeJira()
     settings = settings if settings is not None else make_settings()
     fake = FakeLlm(model="fake-checked-model", steps=list(steps or []))
     chat = ChatService(
-        settings, llm=fake, transport=httpx.MockTransport(jira.handler), retrieval=retrieval
+        settings,
+        llm=fake,
+        transport=httpx.MockTransport(jira.handler),
+        retrieval=retrieval,
+        updates=updates,
     )
     return chat, jira, fake
 

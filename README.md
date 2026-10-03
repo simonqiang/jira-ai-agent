@@ -5,9 +5,6 @@ sprint reports and preparing clear Jira tickets. Design and weekly roadmap:
 
 - [Product requirements and architecture](docs/superpowers/specs/2026-09-27-scrum-master-agent-design.md)
 - [Weekly implementation roadmap](docs/superpowers/plans/2026-09-27-weekly-delivery-roadmap.md)
-- [Ticket quality validation and confirmed updates design](docs/superpowers/specs/2026-10-03-ticket-quality-and-confirmed-updates-design.md)
-- [Ticket quality and confirmed updates implementation plan](docs/superpowers/plans/2026-10-03-ticket-quality-and-confirmed-updates.md)
-- [ADR-0003: Ticket quality validation and user-confirmed updates](docs/decisions/0003-ticket-quality-and-confirmed-updates.md)
 
 Status: **Week 9 — reviewed updates to existing tickets**. Week 1's
 live issue and board reads work for board 23031; Week 2 adds sprint selection, typed
@@ -369,6 +366,22 @@ report, retrieval and operational test gates from this worktree. Set
 PostgreSQL preserves ADK session state and application records across restarts,
 while the rendered browser transcript is transient. See [the Week 12 runbook](docs/superpowers/runbooks/week-12-personal-pilot.md)
 for the manual-live workflow, scratch-only restore drill and working-week log.
+
+### Ticket quality review and confirmed updates (pilot backlog)
+
+`review_ticket(issue_key)` derives the template from the existing Jira ticket
+type and checks it deterministically. Mandatory findings are team-policy
+writing gaps, advisory suggestions never block, and there is no numeric quality
+score — gaps become questions, never invented content.
+
+With the local database configured, the chat agent can also update fields:
+`propose_ticket_update` freezes the exact field-level diff as a local proposal
+(touches nothing in Jira) and the server renders its complete before/after
+values. The browser's one-time **Confirm update** control is the only chat
+execution path; it reuses the Week 9 proposal → approval → execution chain and
+its freshness recheck and read-back verification. Supported fields: summary,
+description, acceptance_criteria, labels, due_date. Without the database the
+agent stays strictly read-only.
 
 ## Layout
 

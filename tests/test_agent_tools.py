@@ -31,6 +31,7 @@ READ_ONLY_TOOL_NAMES = {
     "get_report",
     "list_draft_templates",
     "draft_ticket",
+    "review_ticket",
     "find_related_tickets",
 }
 
@@ -644,3 +645,78 @@ def test_suggestions_disabled_draft_skips_retrieval() -> None:
     assert payload["ok"] is True
     assert "related_tickets" not in payload
     assert stub.calls == []
+
+
+# -- review_ticket (ticket quality) ------------------------------------------------
+
+
+def test_review_ticket_reports_mandatory_and_advisory_findings() -> None:
+    with tools_over(FakeJira()) as tools:
+        payload = tools["review_ticket"]("PAY-1")
+    assert payload["ok"] is True
+    assert payload["issue_key"] == "PAY-1"
+    assert payload["issue_type"] == "Bug"
+    assert payload["ready"] is False
+    assert "steps_to_reproduce" in {item["key"] for item in payload["mandatory"]}
+    assert payload["questions"]
+    assert payload["sources"] == [{"issue_key": "PAY-1"}]
+
+
+def test_review_ticket_uses_the_live_issue_type() -> None:
+    with tools_over(FakeJira()) as tools:
+        payload = tools["review_ticket"]("PAY-1")
+    assert payload["ok"] is True
+    assert payload["issue_type"] == "Bug"
+
+
+def test_review_ticket_unknown_key() -> None:
+    with tools_over(FakeJira()) as tools:
+        bad_key = tools["review_ticket"]("PAY-999")
+    assert bad_key["error"]["kind"] == "not_found"
+
+
+# -- confirmed updates (the only write path) ---------------------------------------
+
+
+def _tools_with_updates(execute_result: dict | None = None):
+    from tests.agent_fakes import FakeUpdateService, service_over
+
+    fake = FakeUpdateService(execute_result)
+    with service_over(FakeJira()) as probe:
+        tools = {tool.name: tool.func for tool in make_tools(probe.service, updates=fake)}
+    return tools, fake
+
+
+def test_update_tools_absent_without_the_updates_service() -> None:
+    from tests.agent_fakes import service_over
+
+    with service_over(FakeJira()) as probe:
+        names = {tool.name for tool in make_tools(probe.service)}
+    assert "propose_ticket_update" not in names
+    assert "execute_confirmed_update" not in names
+    assert READ_ONLY_TOOL_NAMES <= names
+
+
+def test_propose_ticket_update_freezes_diff_and_writes_nothing() -> None:
+    tools, fake = _tools_with_updates()
+    payload = tools["propose_ticket_update"]("PAY-3", {"summary": "New summary"})
+
+    assert payload["ok"] is True
+    assert payload["id"] == 7
+    assert payload["diff"]["summary"] == {"old": None, "new": "New summary"}
+    assert payload["sources"] == [{"issue_key": "PAY-3"}]
+    assert fake.calls == [("propose", "PAY-3", {"summary": "New summary"}, "pilot")]
+
+
+def test_agent_cannot_execute_a_ticket_update() -> None:
+    tools, fake = _tools_with_updates()
+    assert "execute_confirmed_update" not in tools
+    assert fake.calls == []
+
+
+def test_propose_ticket_update_rejects_empty_changes() -> None:
+    tools, fake = _tools_with_updates()
+    payload = tools["propose_ticket_update"]("PAY-3", {})
+    assert payload["ok"] is False
+    assert payload["error"]["kind"] == "invalid_input"
+    assert fake.calls == []
