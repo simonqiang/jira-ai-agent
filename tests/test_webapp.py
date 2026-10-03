@@ -75,6 +75,37 @@ def test_chat_turn_escapes_markup_in_answers() -> None:
     assert "&lt;script&gt;" in response.text
 
 
+def test_chat_turn_renders_markdown_issue_table_accessibly() -> None:
+    table = (
+        "Current sprint: **2025 CDCP&CMIR S19** (active) — 2 tickets:\n\n"
+        "| Key | Type | Status | Summary |\n"
+        "|---|---|---|---|\n"
+        "| GACD-40 | Story | New | Access Database Data via User-Friendly Portal |\n"
+        "| GACD-30 | Bug | New | As a user, I want to reset my password via email link "
+        "so that I can regain access if I forget it <script>alert(1)</script> |"
+    )
+    settings = make_settings(jira_project_key="GACD", known_issue_key="GACD-1")
+    chat, *_ = make_chat(settings=settings, steps=[ScriptedStep(text=table)])
+    app = create_app(settings, chat)
+    with client_for(app) as client:
+        client.get("/")
+        response = client.post("/chat", data={"message": "show sprint issues"})
+
+    assert '<div class="answer-table-wrap">' in response.text
+    assert '<th class="cell-key" scope="col">Key</th>' in response.text
+    assert '<th class="cell-summary" scope="col">Summary</th>' in response.text
+    assert '<th class="cell-type" scope="col">Type</th>' in response.text
+    assert '<col class="col-key">' in response.text
+    assert '<col class="col-type">' in response.text
+    assert "<strong>2025 CDCP&amp;CMIR S19</strong>" in response.text
+    assert "**2025" not in response.text
+    assert 'href="https://test.atlassian.net/browse/GACD-40"' in response.text
+    assert "GACD-30" in response.text
+    assert "regain access if I forget it" in response.text
+    assert "<script>" not in response.text
+    assert "&lt;script&gt;" in response.text
+
+
 def test_chat_turn_rejects_blank_and_overlong_messages() -> None:
     app, *_ = make_app()
     with client_for(app) as client:
