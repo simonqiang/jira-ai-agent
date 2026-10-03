@@ -1,344 +1,205 @@
-# Ticket quality validation and confirmed updates
+# Ticket Quality Validation and Confirmed Updates
 
-Date: 2026-10-03  
-Status: Proposed; documentation only, implementation requires a separate request.  
-Companion: [Implementation plan](../plans/2026-10-03-ticket-quality-and-confirmed-updates.md) · [ADR-0003](../../decisions/0003-ticket-quality-and-confirmed-updates.md)
+**Status:** Proposed  
+**Date:** 2026-10-03
 
-## 1. Intent and success criteria
+## Goal
 
-Extend the personal Scrum Master assistant so the user can review an existing Jira
-ticket against useful agile writing practices, see concrete improvements, and update
-the ticket **only after explicitly confirming the exact proposed changes**.
+Extend the local Scrum Master Jira assistant so a user can assess an existing Story,
+Bug, or Task against the team's agile writing guidance, prepare concrete improvements,
+and update Jira only after explicitly confirming the exact changes.
 
-User requirements: ticket validation, suggested updates, confirmation before every
-update, and a documented design and plan. Proposed first-release assumptions: one
-existing Story, Bug, or Task at a time; the current local browser chat and pilot
-project; confirmation through a review card. These assumptions are open to review.
+Validation, draft improvement, revision, cancellation, and a chat message such as
+"yes" must never write to Jira. The first release confirms only through a
+server-rendered **Confirm update** control that identifies the ticket and payload.
 
-Success means a user can ask “Validate PAY-3,” understand the findings, request an
-improvement, revise the proposal, confirm or cancel, and see the verified Jira result.
-Validation, drafting, and preparing a proposal make zero Jira writes. “Improve this,”
-“update it,” silence, and acceptance of a writing suggestion never authorize a write.
+## Existing foundation
 
-## 2. Existing implementation and gaps
+The repository already has a safe backend update path in
+`scrum_agent.ticketing.updates`:
 
-| Existing code | Current behavior | Extension needed |
+1. Read the live issue and freeze a field-level diff.
+2. Store a proposal.
+3. Record approval.
+4. Re-read the reviewed fields before writing.
+5. Send only the reviewed Jira fields and read them back to verify the result.
+
+It supports `summary`, `description`, `acceptance_criteria`, `labels`, and
+`due_date`. The agent chat is currently read-only, so it cannot validate ticket
+quality or expose that update path safely to the user.
+
+## Quality policy
+
+Create a versioned `quality-v1` policy under a new `scrum_agent.quality` package.
+It has three categories so the agent does not misrepresent a local convention as a
+Scrum rule:
+
+| Category | Meaning | Effect |
 | --- | --- | --- |
-| `drafting/ticket_templates/*.yaml` | Versioned Story/Bug/Task writing policies | Reuse categories; separate actual Jira schema constraints from writing policies |
-| `agent/tools.py`, `agent/instructions.py` | Jira reads, drafting, reports and retrieval; no Jira write tools | Add validation and local proposal preparation |
-| `ticketing/updates.py` | Freeze field diff, approve for 15 minutes, reread, PUT changed fields, verify | Bind review to browser conversation; cancel/supersede; concurrent execution protection |
-| `web/__init__.py` | JSON propose/approve/execute routes; signed local approval session | Visible confirmation card and protected confirmation requests |
-| `agent/chat.py`, `web/templates/_turn.html` | Server-derived sources; textual answers | Server-derived validation and review artifacts |
-| `jira/models.py` | Flattens ADF to readable text | Keep raw rich documents for safe updates and conflict checks |
-| `migrations/004_ticket_updates.sql` | Durable proposals, approvals and executions | Review lifecycle and one execution per proposal |
+| Jira required | A field or value Jira requires according to live edit metadata | Blocks an update |
+| Team policy | Expectations taken from the existing Story/Bug/Task templates | Reports a writing gap |
+| Advisory | Useful refinement advice | Never blocks alone |
 
-The current update allowlist is `summary`, `description`, `acceptance_criteria`,
-`labels`, and `due_date`. Acceptance criteria currently maps to
-`customfield_10350`. The existing creation workflow stays governed by its approval
-service. This feature does not grant the chat model approval or execution access.
+The Scrum Guide asks for clear Product Backlog Items and leaves detailed refinement
+practices to the Scrum Team. INVEST and Given/When/Then are helpful lenses, not
+mandatory Jira formats. Acceptance criteria for one ticket also do not replace the
+team's Definition of Done.
 
-Specific gaps to address: unknown update keys currently reach a dictionary lookup;
-approval deduplication is per approval, allowing separate approvals for one proposal;
-exceptions before or during verification can leave an execution in `executing`;
-plain-string description writes are still an open live check in the Week 9 note.
-These are design inputs, not claims of newly discovered live failures.
-
-## 3. Writing policy and standards
-
-Scrum supports clear backlog items, refinement, and a team Definition of Done.
-Our writing rubric is a proposed team practice: Scrum does not prescribe this ticket
-schema, an “As a…” sentence, or Given/When/Then formatting. Acceptance criteria for
-one item do not replace the Definition of Done for an Increment.
-[Source: Scrum Guide](https://scrumguides.org/scrum-guide.html).
-
-Use INVEST as an advisory lens for Stories: independence, negotiability, value,
-estimability, size, and testability. Given/When/Then is one useful way to express
-observable behavior; clear checklists are also acceptable.
-[INVEST](https://agilealliance.org/glossary/invest/),
-[Given/When/Then](https://agilealliance.org/glossary/given-when-then/).
-
-Keep three categories in a versioned `quality-v1` policy:
-
-- `jira_required`: actual schema/permission constraints from live Jira metadata.
-- `team_policy`: writing expectations derived from the current drafting templates.
-- `advisory`: helpful suggestions that never block an update by themselves.
-
-Existing templates call several writing fields `required_field`, including Story
-role and benefit. Do not interpret those labels as proof Jira requires separate
-fields. Map those template fields into writing checks without changing draft readiness.
-
-| Ticket type | Team writing checks | Advisory checks |
+| Type | Team-policy checks | Advisory checks |
 | --- | --- | --- |
-| All supported types | Meaningful summary; understandable description; actionable outcome; no unresolved placeholders in a proposed write | Ambiguous language; conflicting statements; relevant risks/dependencies |
-| Story | User/beneficiary, goal and value; scope boundary; observable acceptance criteria | INVEST review; applicable error cases; possible split into smaller work |
-| Bug | Observable problem; environment; reproduction steps; expected/actual results; impact; verification criteria | Evidence references; workaround; relevant regression checks |
-| Task | Objective; scope/deliverables; completion checklist | Dependencies and background |
+| Story | user/beneficiary, goal, value, scope boundary, observable acceptance criteria | INVEST, error cases, whether the item should be split |
+| Bug | observable problem, environment, reproduction, expected/actual result, impact, verification criteria | evidence, workaround, regression coverage |
+| Task | objective, scope/deliverables, completion checklist | dependencies and context |
 
-Content may appear in prose, headings, lists, or dedicated fields. Do not demand
-exact headings, English phrasing, or a literal Given/When/Then pattern. Whitespace-
-only content and explicit placeholders such as `[TBD]` count as incomplete.
-An explicit report that reproduction is intermittent is useful evidence; ask for
-available observations instead of fabricating exact reproduction steps.
+The policy accepts meaningful prose, lists, and headings. It does not require exact
+phrases, English text, a literal user-story sentence, or Given/When/Then. Empty text
+and explicit placeholders such as `[TBD]` are deterministic failures. Missing
+estimates or team capacity make size-related checks `unknown`; the service must not
+invent a score, deadline, test threshold, or business impact.
 
-Missing dependencies are not evidence of independence. Missing estimates or team
-capacity make estimability and sprint size `unknown`; do not invent points, a size
-limit, deadlines, performance thresholds, business impact, or production behavior.
-Unsupported issue types receive general advice with `unsupported_type`, never a
-misleading Story score. There is no numeric “agile compliance” score.
+## Validation architecture
 
-## 4. Validation result and assessment
+`TicketQualityService` performs a scoped live issue read and combines:
 
-`TicketQualityService` fetches the scoped live issue, retains a content fingerprint
-and fetch time, then combines deterministic checks with one bounded semantic review.
-The policy ID and issue type are chosen server-side.
+- deterministic checks for supported type, blank values, placeholders, and payload
+  shape; and
+- one bounded model assessment for semantic concerns such as clarity, value,
+  reproducibility, scope, and observable outcomes.
 
-`ValidationReport` contains:
+The model receives only policy rule IDs and ticket content. It has no Jira tools and
+must return a Pydantic-validated response. Each finding includes its rule, category,
+field, status (`pass`, `fail`, `unknown`, `not_applicable`), assessment origin
+(`deterministic` or `ai_assessed`), evidence, reason, and suggestion. An AI finding
+is always labelled as such. Missing AI findings are `unknown`, never passes.
 
-- `validation_id` (UUID), `issue_key`, `issue_type`, `policy_version`, `fetched_at`,
-  `input_hash`, `assessment_complete`.
-- `readiness`: `needs_work`, `needs_clarification`, `ready_for_review`, or
-  `unsupported_type`. This describes writing readiness, never sprint commitment.
-- `findings`: `rule_id`, `category`, `check_status` (`pass`, `fail`, `unknown`,
-  `not_applicable`), `assessment_kind` (`deterministic`, `ai_assessed`), `field`,
-  `evidence`, `reason`, and `suggestion`.
-- `open_questions`, `sources`, and model usage metadata.
+The result includes a validation ID, issue key/type, policy version, live fetch time,
+input hash, open questions, source key, and assessment completeness. Readiness is
+`needs_work`, `needs_clarification`, `ready_for_review`, or `unsupported_type`.
+It means writing readiness only; it does not assert sprint commitment or Definition
+of Done. A deterministic failure overrides an AI pass.
 
-Readiness precedence: unsupported type first; any failed team check means
-`needs_work`; otherwise unknown team checks or incomplete assessment mean
-`needs_clarification`; otherwise `ready_for_review`. Advisory findings do not block.
-Missing Jira edit permissions affect update eligibility, not writing readiness.
+Use one assessment call, a 30-second timeout, and at most 40,000 input characters.
+Timeout, malformed output, provider failure, or oversized content returns all known
+deterministic findings with semantic checks marked `unknown`. Keep reports transient,
+bound to the browser conversation, and expire them after 30 minutes. Validation does
+not require PostgreSQL.
 
-Deterministic checks cover empty content, explicit placeholders, supported types,
-and payload shape. Semantic checks cover whether prose expresses value, scope,
-reproducibility, and observable outcomes. The configured model adapter returns a
-strict Pydantic-validated result using only policy rule IDs. Check every quoted
-excerpt against supplied issue text; reject invented evidence and instructions.
-Model findings remain labeled AI assessments, including passes. Empty content can
-fail deterministically; nonempty unstructured prose requires semantic assessment.
-Any applicable semantic rule omitted by the model becomes `unknown`; omission
-cannot count as a pass. A deterministic failure takes precedence over an AI pass.
-
-The semantic assessor has no tools. Limit it to one call, 30 seconds, and 40,000
-input characters. Larger issues get deterministic results plus an explicit partial
-assessment, with no silent truncation. Meter this call through the existing usage
-recorder. On timeout, malformed output, or provider failure, show known findings,
-mark semantic checks unknown, and offer a retry; never promote partial assessment
-to ready. Return structured errors for Jira denial, authentication, or unavailability.
-
-Reports are transient and keyed by browser conversation, with a 30-minute lifetime;
-validation works without PostgreSQL. Durable update proposals copy needed review
-metadata. Restart/reset invalidates transient report handles. Every proposal uses
-a fresh Jira read even when it references a validation report.
-
-## 5. User interaction and confirmation
-
-1. **Validate:** “Validate PAY-3.” Show ticket type, policy, fetch time, findings,
-   unknowns, and suggested improvements. No update proposal is required.
-2. **Prepare:** “Improve its description and acceptance criteria.” Preserve the
-   documented intent. Mark new wording as proposed. Ask only for facts that cannot
-   safely be derived; do not turn unsupported guesses into requirements.
-3. **Review:** Show a server-rendered card containing the issue link, exact complete
-   old/new values for every changed field, reasons, any unresolved questions,
-   field clearing or formatting replacement, and confirmation expiry. A compact
-   diff may supplement but cannot replace access to complete values.
-4. **Confirm:** User clicks **Confirm update to PAY-3**. The backend records approval
-   and invokes execution of the frozen payload. No separate user click is needed
-   between approve and execute; those remain separate backend operations.
-5. **Revise:** User edits selected fields and chooses **Review revised changes**.
-   Create a new immutable proposal and supersede the previous proposal. The revised
-   proposal needs its own confirmation; no fields are written during revision.
-6. **Cancel:** User clicks **Cancel**. Persist cancellation and disable confirmation.
-7. **Result:** Show actual execution status and verified field outcomes. Success
-   comes from read-back, never from model prose or a successful HTTP PUT alone.
-
-Exact card prompt: “Apply these changes to PAY-3? Review the before and after values.
-Jira will be updated only when you select Confirm update to PAY-3.”
-
-Typing “yes,” “looks good,” or “confirm” in chat directs the user to the matching
-review card; the first release accepts confirmation only through its control.
-Model-rendered Markdown/HTML never creates approval controls. Multiple proposals
-carry their own IDs and issue keys; a confirmation cannot apply to another card.
-
-Validation issues need not be fixed all at once. Allow an approved partial improvement
-while showing remaining quality gaps. Block invalid Jira payloads, empty summaries,
-unresolved placeholders in changed content, and unresolved factual assumptions in
-the proposed write. A user may acknowledge labeled policy/AI cautions on the card;
-that does not convert a suggestion into an established Jira fact.
-
-## 6. Components and contracts
+## User flow
 
 ```mermaid
 sequenceDiagram
     actor User
     participant Chat
     participant Quality as Quality service
-    participant Review as Review service / UI
-    participant Updates as Update service
+    participant Review as Review card
+    participant Update as Update service
     participant Jira
-    User->>Chat: Validate ticket
-    Chat->>Quality: validate_ticket(key, trusted conversation)
-    Quality->>Jira: Scoped live read
-    Quality-->>Chat: Evidence and suggestions
-    User->>Chat: Prepare improvements
-    Chat->>Review: prepare_update(key, changes)
-    Review->>Updates: Freeze live base and exact payload
-    Review-->>User: Before/after card; Confirm / Revise / Cancel
-    User->>Review: Explicit confirmation
-    Review->>Updates: Approve frozen proposal, execute once
-    Updates->>Jira: Reread; schema/permission check; scoped PUT
-    Updates->>Jira: Read back
-    Updates-->>User: Verified outcome or named failure
+    User->>Chat: Validate PAY-3
+    Chat->>Quality: Scoped live read and assessment
+    Quality-->>User: Findings and suggested improvements
+    User->>Chat: Prepare description and criteria changes
+    Chat->>Update: Freeze exact proposal from a fresh live read
+    Update-->>Review: Before/after values and expiry
+    User->>Review: Confirm update to PAY-3
+    Review->>Update: Approve frozen payload and execute once
+    Update->>Jira: Re-read, update selected fields, verify
+    Update-->>User: Verified result or named conflict/failure
 ```
 
-New modules under `quality/`: `models.py` for contracts, `policy.py` for versioned
-rules, `assessor.py` for the bounded model assessment, and `service.py` for orchestration.
-New `ticketing/review.py` owns browser review context, eligibility, and card views;
-`ticketing/updates.py` remains the only existing-ticket write orchestrator.
+The review card shows the complete old and new value of every changed field, the
+issue link, rationale, unresolved questions, explicit clear/whole-field replacement
+warnings, expiry, and three choices:
 
-Proposed Python interfaces:
+- **Confirm update to PAY-3**: approve and execute the frozen payload.
+- **Review revised changes**: create a new immutable proposal and supersede the old
+  one after a fresh issue read.
+- **Cancel**: persist cancellation and disable the card.
 
-- `QualityAssessor.assess(text: str, *, policy_version: str, issue_type: str,
-  conversation_id: str) -> SemanticAssessment` (async; no Jira access).
-- `TicketQualityService.validate_ticket(issue_key: str, *, conversation_id: str)
-  -> ValidationReport` (async).
-- `TicketReviewService.prepare_update(issue_key: str, changes: dict, *, creator: str,
-  conversation_id: str, validation_id: str | None = None) -> ReviewCard`.
-- `get_review(proposal_id: int, *, creator: str, conversation_id: str) -> ReviewCard`.
-- `cancel_review(proposal_id: int, *, creator: str, conversation_id: str) -> ReviewCard`.
+A partial improvement is allowed while remaining quality gaps stay visible. A model
+may prepare wording but never creates a control, approves, or executes an update.
 
-Browser revisions call `revise_review(proposal_id: int, changes: dict, *, creator: str,
-conversation_id: str) -> ReviewCard`. This atomically persists the replacement and
-supersedes the original after a fresh read; if preparation fails, retain the original
-review. Proposal preparation checks any report reference belongs to the same issue
-and conversation. All model-produced wording is labeled proposed in the card.
+## Interfaces and UI boundary
 
-ADK tools: `validate_ticket(issue_key)` and
-`prepare_ticket_update(issue_key, changes, validation_id=None)`. Derive identity
-and conversation from trusted tool context, never tool arguments. Expose no approve,
-execute, cancel, credentials, raw JQL, or arbitrary field-ID tool. Extend
-`TurnResult`/`TurnView` with structured `validation_reports` and `update_proposal_ids`.
-Collect artifacts from actual tool responses; resolve proposal IDs against the store
-and owner before rendering. A model-invented ID does not become an action card.
+Add `quality/models.py`, `quality/policy.py`, `quality/assessor.py`, and
+`quality/service.py`. Main interfaces:
 
-Reuse `POST /tickets/updates`, `POST /tickets/update-proposals/{id}/approve`, and
-`POST /tickets/update-approvals/{id}/execute`. Add scoped review
-`GET /tickets/update-proposals/{id}` and cancel
-`POST /tickets/update-proposals/{id}/cancel`. Add a browser form handler
-`POST /tickets/update-proposals/{id}/confirm` that composes approve/execute and returns
-a result fragment. All approval paths require the same reviewed hash and protected
-user request, including the existing JSON endpoints; do not leave a bypass.
+```python
+async def validate_ticket(issue_key: str, *, conversation_id: str) -> ValidationReport: ...
+async def assess(text: str, *, policy_version: str, issue_type: str,
+                 conversation_id: str) -> SemanticAssessment: ...
+def prepare_update(issue_key: str, changes: dict, *, creator: str,
+                   conversation_id: str, validation_id: str | None) -> ReviewCard: ...
+```
 
-## 7. Approval, persistence and write correctness
+Add exactly two agent tools: `validate_ticket(issue_key)` and
+`prepare_ticket_update(issue_key, changes, validation_id=None)`. Identity and
+conversation come from trusted server context, never model arguments. There is no
+agent tool for approval, execution, cancellation, credentials, raw JQL, or arbitrary
+Jira field IDs.
 
-Use the existing signed single-user approval session. Bind proposals to its configured
-user and browser conversation; add a random session CSRF token to every ticket
-mutation form/JSON request. Retain loopback Host/Origin checks and SameSite cookies.
-A server-issued review token binds proposal ID, payload hash, user, conversation,
-and review expiry. Reject missing/mismatched tokens before persisting approval.
-The token is proof of the protected review context; the user still supplies the
-explicit confirmation action. Never expose approval routes to the model.
+The chat service carries structured validation reports and proposal IDs from actual
+tool responses. The web server resolves those IDs against the owner and current
+conversation before rendering a card. Model-invented IDs or Markdown cannot trigger
+an action.
 
-New proposals expire after 24 hours. A confirmed approval retains the existing
-15-minute lifetime. Edits always create a new payload hash; approval cannot transfer.
-Cancellation/superseding must atomically check lifecycle state. Once execution is
-claimed, disable cancellation/revision and report “Update in progress.” New proposals
-in another conversation never inherit old approvals. Legacy proposals without review
-binding remain inspectable for audit but require fresh preparation to execute.
+## Confirmation and persistence
 
-Migration `006_ticket_quality_reviews.sql` adds proposal conversation, policy/input
-metadata, exact encoded Jira fields, raw base values, expiry, and review state
-(`pending`, `approved`, `cancelled`, `superseded`). Existing proposal identity, base,
-changes and hash stay immutable. Add `ticket_update_claims` keyed uniquely by
-`proposal_id`, with approval/execution references. Backfill claims for existing
-executions; if multiple legacy executions reference a proposal, use its earliest
-execution as the claim and retain all historical rows. Pending legacy proposals
-cannot acquire a new claim without fresh review binding.
+Create migration `006_ticket_quality_reviews.sql`. Store conversation binding,
+policy/input metadata, exact encoded Jira fields, raw base field values, expiry, and
+review state (`pending`, `approved`, `cancelled`, `superseded`) with each new
+proposal. Existing proposal identity, base, changes, and hash remain immutable.
 
-Approval creation and execution claim use transactional row locks/constraints.
-Repeated confirmation returns the same approval/result. The claim is at proposal
-level, so multiple approval IDs cannot produce multiple PUTs. The owner check,
-state check, expiry check, hash recomputation and atomic claim run for both browser
-and JSON execution. Failed, stale or uncertain executions consume the approval;
-a new write attempt requires a new review.
+Hash a canonical object containing issue identity/type, raw base values, exact Jira
+payload, creator, conversation, policy version, and validation hash. Recompute it
+when confirming; comparing stored hashes alone is insufficient. Proposals last 24
+hours; an approved execution retains the existing 15-minute limit.
 
-For new proposals, hash a canonical JSON object containing issue identity/type,
-raw base values, exact encoded Jira fields, and review provenance (creator,
-conversation, policy version and validation input hash). The card displays readable
-values derived from that frozen payload. Execution recomputes this hash from stored
-data; comparing two stored hash strings alone does not establish payload integrity.
+Bind review forms and JSON mutation endpoints to the signed local approval session,
+a server-issued review token, and a session CSRF token. The token binds proposal,
+payload hash, user, conversation, and expiry. Keep loopback Host/Origin checks and
+SameSite cookies. Pending legacy proposals require fresh preparation before execution.
 
-Before the PUT: reread Jira, check pilot scope, issue identity/type, edit metadata,
-field types and permission. Reread raw base values for every changed field; any
-change rejects the write with conflicts. Unrelated-field edits survive. Encode
-and hash the exact Jira payload before review; if metadata changes the encoding,
-require a new proposal. Never send the entire issue or untouched fields.
+Add a proposal-level execution claim with a database uniqueness constraint and
+transactional row locking. Repeated or concurrent confirmation returns the same
+recorded result and produces at most one Jira PUT per proposal, even if separate
+approval IDs exist.
 
-Preserve rich documents: Jira v3 uses ADF for descriptions and multiline custom
-fields; single-line custom fields use strings. Use live field metadata to determine
-acceptance-criteria encoding. Retain raw ADF for conflict checks and verification.
-Editing a template section must preserve all other nodes; an arbitrary rich document
-without an unambiguous section boundary is eligible only for a clearly displayed
-whole-field replacement explicitly confirmed on the card. Preserve nodes in ordinary
-section edits; never silently flatten tables, attachments, links, or marks.
-[REST v3](https://developer.atlassian.com/cloud/jira/platform/rest/v3/),
-[ADF structure](https://developer.atlassian.com/cloud/jira/platform/apis/document/structure/).
+## Jira content safety
 
-Label arrays are exact replacements unless a supported add/remove operation is
-introduced later. Clearing fields must be explicit and visible. Unknown keys fail
-with `invalid_input` before any write; payload types/limits stay enforced server-side.
+Before a write, check scope, current issue identity/type, edit metadata, permissions,
+field schema, canonical payload hash, and raw values of every reviewed field. If a
+reviewed field changed, reject the proposal as stale. Changes in other fields survive
+because they are not sent.
 
-Execution statuses: existing `succeeded`, `rejected_stale`, `verification_failed`,
-`failed`, and `executing`, plus `outcome_unknown`. If the PUT may have landed and the
-read-back fails, record `outcome_unknown`; never retry the PUT automatically. Startup
-reconciles interrupted claims by a scoped read only. Matching values yield a
-reconciled success; otherwise show uncertainty requiring human inspection. Failures
-known to occur before PUT are `failed`. Every exception finalizes an audit outcome
-or leaves a durable interrupted record that reconciliation can discover.
+Jira Cloud rich descriptions and multiline fields can use Atlassian Document Format
+(ADF). Retain raw ADF for hashes, conflict checks, and verification. A targeted
+section edit must preserve all unrelated nodes. If a rich document does not have an
+unambiguous section boundary, only a complete whole-field replacement that is clearly
+shown and explicitly confirmed is eligible. Do not silently flatten lists, tables,
+links, attachments, or formatting.
 
-The existing reread/PUT race remains: the inspected API contract provides no update
-precondition used by this client. Another Jira actor can edit between those calls.
-Minimize the interval, retain the audit, and disclose this limit; do not claim atomic
-protection against external Jira edits.
+The result can be `succeeded`, `rejected_stale`, `verification_failed`, `failed`,
+or `outcome_unknown`. A failed verification read after a PUT that might have landed
+is `outcome_unknown`; the service must never retry that PUT automatically. Startup
+may reconcile an interrupted execution with reads only. Jira's API lacks an atomic
+precondition for this client, so an external edit can still race the final re-read
+and PUT; disclose this residual limit in the result and audit record.
 
-## 8. Delivery boundaries and acceptance
+## Acceptance criteria
 
-Deliver validation first, then strengthen the existing write workflow, then connect
-chat to review cards. Use the configured model and local stack; no additional model
-provider or hosted service. Preparing updates requires PostgreSQL; validation does
-not. No bulk updates, transitions, deletion, comments, assignments, priorities,
-issue-type changes, automatic creation, or automated edits from validation alone.
+1. Good and poor Story, Bug, and Task examples produce evidence-backed findings;
+   unstructured but clear acceptance criteria can pass without Given/When/Then.
+2. Validation, preparation, revision, cancellation, chat "yes", missing/forged CSRF,
+   expired/superseded proposals, and wrong session/conversation cause zero Jira PUTs.
+3. The confirmation card exposes complete exact values and one protected click applies
+   only that frozen payload, at most once.
+4. A change to a reviewed field rejects the proposal; an unrelated edit survives.
+5. ADF formatting is preserved or the complete replacement is explicitly disclosed.
+6. Lost response/read-back cases are reconciled or marked uncertain, never claimed as
+   successful and never blindly retried.
+7. Injected text in ticket content cannot change policy, access, tools, or updates.
 
-Acceptance checks:
+Implementation is intentionally limited to one existing supported ticket at a time.
+Bulk updates, transitions, comments, deletion, assignments, priorities, issue-type
+changes, and automatic editing from a validation result are out of scope.
 
-1. Good and poor Story/Bug/Task examples produce evidence-backed findings; clear
-   free-form acceptance criteria pass without mandatory Given/When/Then.
-2. A partial/unavailable assessment and missing sizing context remain unknown.
-3. Validate/prepare/revise/cancel and chat “yes” produce zero Jira mutation requests.
-4. Confirmation shows exact selected field values; one protected user click applies
-   that payload once and produces a verified result.
-5. Wrong owner/conversation, missing CSRF, changed hash, expired approval, cancelled
-   or superseded proposal all cause zero PUTs.
-6. Concurrent confirmations and multiple approval IDs yield at most one PUT per
-   proposal. A reset/restart cannot silently approve an old proposal.
-7. Changed reviewed fields reject stale proposals; edits elsewhere survive.
-8. ADF content/formatting is preserved or its complete replacement is disclosed.
-9. Lost PUT responses reconcile by read; failed read-back yields uncertainty with
-   no automatic write retry. Model output never fabricates update success.
-10. Injected ticket instructions, unsupported fields/types, invalid schema, and
-    out-of-scope keys fail safely without widening access or inventing requirements.
-
-Use fake Jira/model transports and a disposable PostgreSQL database for automated
-verification during implementation. Manual live acceptance uses a user-selected
-sandbox issue and the same explicit review confirmation. Store only anonymized
-fixtures in the repository; issue text, review payloads and prompts stay out of logs.
-
-## 9. Decisions and remaining product choices
-
-Recommendation: deterministic checks plus labeled AI assessment and server-enforced
-confirmation, reusing the Week 9 service. Prompt-only validation is cheaper to build
-but inconsistent and cannot enforce approval. Deterministic-only validation is
-repeatable but misses meaning in free-form prose. See ADR-0003 for the decision.
-
-The proposal is implementable with the stated defaults. Review may adjust team policy,
-review expiry, or whether chat confirmation is added later. None of these defaults
-weakens the requirement for an explicit user confirmation of every update.
