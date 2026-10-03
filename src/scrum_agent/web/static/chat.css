@@ -78,12 +78,18 @@ body {
 }
 .answer-table {
   width: 100%;
-  min-width: 560px;
+  min-width: 680px;
+  table-layout: fixed;
   border-collapse: collapse;
   white-space: normal;
+  overflow-wrap: normal;
   font-size: 14px;
   line-height: 1.45;
 }
+.answer-table .col-key { width: 82px; }
+.answer-table .col-type { width: 84px; }
+.answer-table .col-status { width: 84px; }
+.answer-table .col-assignee { width: 124px; }
 .answer-table th,
 .answer-table td {
   padding: 10px 12px;
@@ -99,13 +105,15 @@ body {
   letter-spacing: 0.045em;
   text-transform: uppercase;
 }
-.answer-table th:first-child,
-.answer-table td:first-child { white-space: nowrap; }
-.answer-table td:nth-child(2),
-.answer-table td:nth-child(3) { white-space: nowrap; }
+.answer-table th,
+.answer-table td { overflow-wrap: normal; }
+.answer-table .cell-key,
+.answer-table .cell-type,
+.answer-table .cell-status,
+.answer-table .cell-assignee { white-space: nowrap; }
 .answer-table tbody tr:last-child td { border-bottom: 0; }
 .answer-table tbody tr:hover { background: #f7f9fb; }
-.answer-table td:last-child { min-width: 280px; }
+.answer-table .cell-summary { overflow-wrap: anywhere; }
 
 .sources { margin-top: 8px; font-size: 13px; color: var(--muted); }
 .sources summary {

@@ -38,9 +38,7 @@ def linkify_issue_keys(text: str, pattern: re.Pattern[str], jira_site: str) -> M
                 rendered.append(_render_table(headers, rows, pattern, jira_site))
                 index = cursor
                 continue
-        escaped = html.escape(lines[index], quote=True)
-        linked = pattern.sub(lambda match: _issue_link(match, jira_site), escaped)
-        rendered.append(Markup(linked))
+        rendered.append(_render_text(lines[index], pattern, jira_site))
         index += 1
     return Markup("\n").join(rendered)
 
@@ -84,24 +82,54 @@ def _render_table(
     pattern: re.Pattern[str],
     jira_site: str,
 ) -> Markup:
+    columns = "".join(
+        f'<col class="col-{_column_kind(value)}">' for value in headers
+    )
     head = "".join(
-        f'<th scope="col">{_linked_cell(value, pattern, jira_site)}</th>' for value in headers
+        f'<th class="cell-{_column_kind(value)}" scope="col">'
+        f'{_linked_cell(value, pattern, jira_site)}</th>'
+        for value in headers
     )
     body = "".join(
         "<tr>"
-        + "".join(f"<td>{_linked_cell(value, pattern, jira_site)}</td>" for value in row)
+        + "".join(
+            f'<td class="cell-{_column_kind(headers[index])}">'
+            f"{_linked_cell(value, pattern, jira_site)}</td>"
+            for index, value in enumerate(row)
+        )
         + "</tr>"
         for row in rows
     )
     return Markup(
-        '<div class="answer-table-wrap"><table class="answer-table"><thead><tr>'
+        '<div class="answer-table-wrap"><table class="answer-table"><colgroup>'
+        f"{columns}</colgroup><thead><tr>"
         f"{head}</tr></thead><tbody>{body}</tbody></table></div>"
     )
 
 
+def _column_kind(label: str) -> str:
+    normalized = re.sub(r"[^a-z]+", "-", label.casefold()).strip("-")
+    if normalized in {"key", "issue", "issue-key"}:
+        return "key"
+    if normalized in {"type", "issue-type"}:
+        return "type"
+    if normalized == "status":
+        return "status"
+    if normalized in {"assignee", "owner"}:
+        return "assignee"
+    return "summary" if normalized in {"summary", "title"} else "other"
+
+
 def _linked_cell(value: str, pattern: re.Pattern[str], jira_site: str) -> Markup:
     escaped = html.escape(value, quote=True)
+    escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
     return Markup(pattern.sub(lambda match: _issue_link(match, jira_site), escaped))
+
+
+def _render_text(value: str, pattern: re.Pattern[str], jira_site: str) -> Markup:
+    escaped = html.escape(value, quote=True)
+    emphasized = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+    return Markup(pattern.sub(lambda match: _issue_link(match, jira_site), emphasized))
 
 
 def _issue_link(match: re.Match[str], jira_site: str) -> str:
