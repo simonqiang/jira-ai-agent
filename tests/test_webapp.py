@@ -435,7 +435,11 @@ def test_approved_ticket_flow_creates_exactly_once() -> None:
     executed = client.post(f"/tickets/approvals/{approval.json()['id']}/execute")
     assert executed.status_code == 200
     assert executed.json()["issue_key"] == "PAY-90"
-    assert jira.created_fields == [body["payload"]]  # exact approved bytes
+    from scrum_agent.jira.client import _as_jira_fields
+
+    assert jira.created_fields == [
+        _as_jira_fields(body["payload"])
+    ]  # exact approved bytes (ADF-converted at the Jira boundary)
 
     again = client.post(f"/tickets/approvals/{approval.json()['id']}/execute")
     assert again.json() == executed.json()
@@ -557,7 +561,9 @@ def test_reviewed_update_flow_applies_once_and_verifies() -> None:
     executed = client.post(f"/tickets/update-approvals/{approval.json()['id']}/execute")
     assert executed.status_code == 200
     assert executed.json()["status"] == "succeeded"
-    assert jira.update_calls == [("PAY-3", {"customfield_10350": criteria})]
+    from scrum_agent.jira.client import _as_jira_fields
+
+    assert jira.update_calls == [("PAY-3", _as_jira_fields({"customfield_10350": criteria}))]
     execution = storage.executions[executed.json()["execution_id"]]
     assert execution["status"] == "succeeded"
     assert execution["requested"] == {"acceptance_criteria": criteria}

@@ -15,6 +15,25 @@ def parse_jira_time(value: str) -> datetime:
     return parsed
 
 
+def adf_text(text: str) -> dict:
+    """Build an Atlassian Document Format doc from plain text.
+
+    The exact inverse of ``jira_text`` for parser-produced text: one paragraph
+    per line, empty lines become empty paragraphs, so writing a description
+    read back from Jira round-trips byte-for-byte. Jira Cloud v3 rejects plain
+    strings for ADF fields (for example ``description``) with HTTP 400.
+    """
+    lines = text.split("\n")
+    return {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {"type": "paragraph", "content": ([{"type": "text", "text": line}] if line else [])}
+            for line in lines
+        ],
+    }
+
+
 def jira_text(value: object) -> str | None:
     """Return plain text from a Jira string or Atlassian Document Format value."""
     if isinstance(value, str):
