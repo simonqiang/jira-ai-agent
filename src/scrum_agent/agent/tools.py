@@ -5,8 +5,10 @@ Four search tools (``get_issue``, ``list_sprints``, ``search_issues``,
 ``get_report``), which never block the conversation, and the two Week 7
 drafting tools (``list_draft_templates``/``draft_ticket``), which turn
 user-supplied text into an editable Story/Bug/Task draft and never write to
-Jira, and the Week 10 retrieval tool (``find_related_tickets``), which returns
-only chunks re-verified against live Jira. Inputs are plain JSON
+Jira, the Week 10 retrieval tool (``find_related_tickets``), which returns
+only chunks re-verified against live Jira, and the quality-review tool
+(``review_ticket``), a deterministic read-only check of an existing ticket
+against the team template. Inputs are plain JSON
 primitives (ADK's argument coercion swallows
 ``ValidationError`` for model classes, so ``IssueFilters`` is built inside each
 tool); outputs are structured payloads. No tool accepts raw JQL, credentials
@@ -26,6 +28,7 @@ from scrum_agent.agent.payloads import (
     normalize_states,
     ok_draft_payload,
     ok_issue_payload,
+    ok_quality_payload,
     ok_retrieval_payload,
     ok_search_payload,
     ok_sprints_payload,
@@ -35,6 +38,7 @@ from scrum_agent.drafting import build_draft, default_templates, get_template
 from scrum_agent.reports.jobs import job_view
 from scrum_agent.search.filters import IssueFilters
 from scrum_agent.search.service import SearchService
+from scrum_agent.ticketing.quality import extract_template_fields, review_ticket_fields
 
 
 def _clean(values: list[str] | None) -> tuple[str, ...]:
@@ -283,6 +287,28 @@ def make_tools(
         except Exception as exc:
             return error_payload("draft_ticket", exc)
 
+    def review_ticket(issue_key: str, issue_type: str = "Story") -> dict:
+        """Review an existing ticket against the team's quality template.
+
+        Fetches the issue once and checks it deterministically: mandatory
+        findings (required_field or team_policy sections missing) must be
+        fixed before refinement; advisory suggestions never block. Findings
+        name specific weaknesses — there is no numeric score and none may be
+        invented. issue_type must exactly match a template from
+        list_draft_templates (Story, Bug or Task). Makes no Jira changes.
+        """
+        try:
+            issue = service.get_issue(_text(issue_key, "issue_key"))
+            template = get_template(default_templates(), _text(issue_type, "issue_type"))
+            fields = extract_template_fields(issue, template)
+            review = review_ticket_fields(fields, template)
+            payload = ok_quality_payload("review_ticket", review)
+            payload["issue_key"] = issue.key
+            payload["sources"] = [{"issue_key": issue.key}]
+            return payload
+        except Exception as exc:  # translated into a payload, never raised into ADK
+            return error_payload("review_ticket", exc)
+
     def find_related_tickets(query: str, top_k: int | None = None) -> dict:
         """Find project tickets related to a free-text description.
 
@@ -323,5 +349,6 @@ def make_tools(
         FunctionTool(func=get_report),
         FunctionTool(func=list_draft_templates),
         FunctionTool(func=draft_ticket),
+        FunctionTool(func=review_ticket),
         FunctionTool(func=find_related_tickets),
     ]

@@ -140,6 +140,17 @@ def ok_draft_payload(tool: str, draft: dict) -> dict:
     }
 
 
+def ok_quality_payload(tool: str, review: dict) -> dict:
+    """A deterministic quality review; the caller adds the issue source."""
+    return {
+        "ok": True,
+        "tool": tool,
+        **review,
+        "fetched_at": _now_iso(),
+        "sources": [],
+    }
+
+
 def ok_retrieval_payload(tool: str, result: RetrievalResult) -> dict:
     """Serialize a ``RetrievalResult``: verified hits plus excluded sources.
 

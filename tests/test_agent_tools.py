@@ -31,6 +31,7 @@ READ_ONLY_TOOL_NAMES = {
     "get_report",
     "list_draft_templates",
     "draft_ticket",
+    "review_ticket",
     "find_related_tickets",
 }
 
@@ -644,3 +645,26 @@ def test_suggestions_disabled_draft_skips_retrieval() -> None:
     assert payload["ok"] is True
     assert "related_tickets" not in payload
     assert stub.calls == []
+
+
+# -- review_ticket (ticket quality) ------------------------------------------------
+
+
+def test_review_ticket_reports_mandatory_and_advisory_findings() -> None:
+    with tools_over(FakeJira()) as tools:
+        payload = tools["review_ticket"]("PAY-1", "Bug")
+    assert payload["ok"] is True
+    assert payload["issue_key"] == "PAY-1"
+    assert payload["issue_type"] == "Bug"
+    assert payload["ready"] is False
+    assert "steps_to_reproduce" in {item["key"] for item in payload["mandatory"]}
+    assert payload["questions"]
+    assert payload["sources"] == [{"issue_key": "PAY-1"}]
+
+
+def test_review_ticket_unknown_template_and_key() -> None:
+    with tools_over(FakeJira()) as tools:
+        bad_type = tools["review_ticket"]("PAY-1", "Epic")
+        bad_key = tools["review_ticket"]("PAY-999", "Bug")
+    assert bad_type["error"]["kind"] == "invalid_input"
+    assert bad_key["error"]["kind"] == "not_found"
