@@ -367,6 +367,24 @@ PostgreSQL preserves ADK session state and application records across restarts,
 while the rendered browser transcript is transient. See [the Week 12 runbook](docs/superpowers/runbooks/week-12-personal-pilot.md)
 for the manual-live workflow, scratch-only restore drill and working-week log.
 
+### Ticket quality review and confirmed updates (pilot backlog)
+
+`review_ticket(issue_key, issue_type)` checks an existing ticket against the
+team template deterministically: mandatory findings (required/team-policy
+sections missing) must be fixed, advisory suggestions never block, and there
+is no numeric quality score — gaps become questions, never invented content.
+
+With the local database configured, the chat agent can also update fields:
+`propose_ticket_update` freezes the exact field-level diff as a local proposal
+(touches nothing in Jira) and the agent shows it verbatim;
+`execute_confirmed_update` runs only after the user explicitly confirms that
+diff, reusing the Week 9 proposal → approval → execution chain with its
+freshness recheck and read-back verification (`succeeded`/`rejected_stale`/
+`verification_failed`/`failed`). Supported fields: summary, description,
+acceptance_criteria, labels, due_date. Nothing reaches Jira until the user
+explicitly confirms the shown diff; without the database the agent stays
+strictly read-only.
+
 ## Layout
 
 ```
