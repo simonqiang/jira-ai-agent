@@ -30,6 +30,7 @@ _UPDATABLE_FIELDS: dict[str, tuple[str, Callable[[Issue], object]]] = {
     "acceptance_criteria": ("customfield_10350", lambda issue: issue.acceptance_criteria),
     "labels": ("labels", lambda issue: sorted(set(issue.labels))),
     "due_date": ("duedate", lambda issue: issue.due_date),
+    "assignee": ("assignee", lambda issue: issue.assignee),
 }
 
 _STRING_FIELDS = frozenset({"summary", "description", "acceptance_criteria"})
@@ -58,9 +59,15 @@ class JiraUpdateClient(Protocol):
 
     def update_issue(self, issue_key: str, fields: dict) -> None: ...
 
+    def find_assignable(self, issue_key: str, query: str) -> list[dict]: ...
+
 
 def _normalize(field: str, value: object) -> object:
     """Canonical form for one field value; proposal and re-read both use it."""
+    if field == "assignee":
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("assignee must be a non-empty user name as shown in Jira")
+        return value.strip()
     if field == "labels":
         if not isinstance(value, (list, tuple)) or not all(
             isinstance(label, str) for label in value
@@ -124,6 +131,24 @@ class TicketUpdateService:
         self._jira = jira
         self._now = now or (lambda: datetime.now(UTC))
 
+    def _resolve_assignee(self, issue_key: str, name: str) -> str:
+        """Jira accountId for one assignable user's display name (exact match)."""
+        users = self._jira.find_assignable(issue_key, name)
+        matches = [
+            user for user in users if user["display_name"].strip().lower() == name.strip().lower()
+        ]
+        if len(matches) == 1:
+            return str(matches[0]["account_id"])
+        if not matches:
+            known = ", ".join(user["display_name"] for user in users[:5]) or "none found"
+            raise ValueError(
+                f"No assignable user named {name!r} on {issue_key}; "
+                f"assignable users include: {known}"
+            )
+        raise ValueError(
+            f"Multiple assignable users named {name!r} on {issue_key}; ask for a more specific name"
+        )
+
     def propose_update(self, issue_key: str, changes: dict, *, creator: str) -> dict:
         if not isinstance(issue_key, str) or not issue_key.strip():
             raise ValueError("issue_key must be a Jira issue key such as PAY-3")
@@ -140,6 +165,12 @@ class TicketUpdateService:
         if not diff:
             raise ValueError("Every requested value already matches the issue; nothing to change")
         changes = {key: item["new"] for key, item in diff.items()}
+        # Validate assignee resolvability up front so an unresolvable name
+        # never becomes a confirmable proposal; resolution is repeated at
+        # execution time against live Jira.
+        for key in changes:
+            if key == "assignee":
+                self._resolve_assignee(issue.key, str(changes[key]))
         # The stale-check base covers exactly the fields this proposal writes;
         # no-op fields from the request are not part of the write.
         base = {key: current[key] for key in changes}
@@ -197,6 +228,18 @@ class TicketUpdateService:
         if proposal is None or proposal["payload_hash"] != approval["payload_hash"]:
             raise ValueError("Proposal changed after approval; approve its current diff")
 
+        # Assignee names resolve to Jira accountIds here, before the execution
+        # record exists: a resolution failure (user removed, renamed) raises
+        # without leaving a stuck "executing" row or consuming the approval.
+        payload_changes = dict(proposal["changes"])
+        for key in payload_changes:
+            if key == "assignee":
+                payload_changes[key] = {
+                    "accountId": self._resolve_assignee(
+                        proposal["issue_key"], str(payload_changes[key])
+                    )
+                }
+
         execution_id = self._storage.create_update_execution(
             approval_id=approval_id,
             payload_hash=proposal["payload_hash"],
@@ -221,7 +264,7 @@ class TicketUpdateService:
             status, verified = "rejected_stale", {"conflicts": conflicts}
         else:
             try:
-                self._jira.update_issue(issue.key, _jira_fields(proposal["changes"]))
+                self._jira.update_issue(issue.key, _jira_fields(payload_changes))
                 verified = _verify(self._jira.get_issue(issue.key), proposal["changes"])
                 status = (
                     "succeeded"

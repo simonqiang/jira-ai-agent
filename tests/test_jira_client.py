@@ -918,3 +918,14 @@ def test_create_issue_converts_description_to_adf() -> None:
     sent = json.loads(requests[0].content)["fields"]
     assert sent["description"]["type"] == "doc"
     assert len(sent["description"]["content"]) == 2
+
+
+def test_find_assignable_parses_account_and_display_name() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/rest/api/3/user/assignable/search"
+        assert request.url.params["issueKey"] == "PAY-3"
+        return ok([{"accountId": "acc-1", "displayName": "A. Developer"}, {"displayName": "no-id"}])
+
+    client, _ = make_client(handler)
+    users = client.find_assignable("PAY-3", "dev")
+    assert users == [{"account_id": "acc-1", "display_name": "A. Developer"}]

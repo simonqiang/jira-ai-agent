@@ -737,3 +737,12 @@ def test_propose_ticket_update_accepts_labels_list_directly() -> None:
 
     assert payload["ok"] is True
     assert fake.calls == [("propose", "PAY-3", {"labels": ["Test-AI"]}, "pilot")]
+
+
+def test_propose_ticket_update_passes_assignee_through() -> None:
+    tools, fake = _tools_with_updates()
+    payload = tools["propose_ticket_update"]("PAY-3", {"assignee": "A. Developer"})
+
+    assert payload["ok"] is True
+    assert payload["diff"]["assignee"] == {"old": None, "new": "A. Developer"}
+    assert fake.calls == [("propose", "PAY-3", {"assignee": "A. Developer"}, "pilot")]
