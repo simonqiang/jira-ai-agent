@@ -82,12 +82,10 @@ def _render_table(
     pattern: re.Pattern[str],
     jira_site: str,
 ) -> Markup:
-    columns = "".join(
-        f'<col class="col-{_column_kind(value)}">' for value in headers
-    )
+    columns = "".join(f'<col class="col-{_column_kind(value)}">' for value in headers)
     head = "".join(
         f'<th class="cell-{_column_kind(value)}" scope="col">'
-        f'{_linked_cell(value, pattern, jira_site)}</th>'
+        f"{_linked_cell(value, pattern, jira_site)}</th>"
         for value in headers
     )
     body = "".join(
@@ -135,7 +133,6 @@ def _render_text(value: str, pattern: re.Pattern[str], jira_site: str) -> Markup
 def _issue_link(match: re.Match[str], jira_site: str) -> str:
     key = match.group(0)
     return f'<a href="https://{jira_site}/browse/{key}" target="_blank" rel="noopener">{key}</a>'
-
 
 
 def localtime(timestamp: str, timezone_name: str) -> str:

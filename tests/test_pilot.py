@@ -16,7 +16,9 @@ def test_preflight_accepts_integrated_local_configuration() -> None:
     checks = preflight(
         make_settings(
             database_url="postgresql://pilot:password@127.0.0.1/scrum_agent",
-            model_name="model", model_api_key="secret", embedding_model="embed",
+            model_name="model",
+            model_api_key="secret",
+            embedding_model="embed",
         )
     )
 
@@ -37,7 +39,9 @@ def test_preflight_makes_disabled_suggestions_explicit() -> None:
     checks = preflight(
         make_settings(
             database_url="postgresql://pilot:password@127.0.0.1/scrum_agent",
-            model_name="model", model_api_key="secret", embedding_model="embed",
+            model_name="model",
+            model_api_key="secret",
+            embedding_model="embed",
             suggestions_enabled=False,
         )
     )
@@ -49,7 +53,9 @@ def test_preflight_never_discloses_database_credentials() -> None:
     checks = preflight(
         make_settings(
             database_url="postgresql://pilot:password@127.0.0.1/scrum_agent",
-            model_name="model", model_api_key="secret", embedding_model="embed",
+            model_name="model",
+            model_api_key="secret",
+            embedding_model="embed",
         )
     )
 
