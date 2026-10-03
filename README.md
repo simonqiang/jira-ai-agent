@@ -6,6 +6,12 @@ sprint reports and preparing clear Jira tickets. Design and weekly roadmap:
 - [Product requirements and architecture](docs/superpowers/specs/2026-09-27-scrum-master-agent-design.md)
 - [Weekly implementation roadmap](docs/superpowers/plans/2026-09-27-weekly-delivery-roadmap.md)
 
+Proposed next enhancement: validate Story/Bug/Task writing quality and review exact
+ticket changes in chat before explicit user confirmation. Documentation only:
+[design](docs/superpowers/specs/2026-10-03-ticket-quality-and-confirmed-updates-design.md),
+[implementation plan](docs/superpowers/plans/2026-10-03-ticket-quality-and-confirmed-updates.md),
+and [decision record](docs/decisions/0003-ticket-quality-and-confirmed-updates.md).
+
 Status: **Week 9 — reviewed updates to existing tickets**. Week 1's
 live issue and board reads work for board 23031; Week 2 adds sprint selection, typed
 filters, centralized pilot-scope checks and a checked query set; Week 3 ships the
