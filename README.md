@@ -30,8 +30,18 @@ to your LAN or the internet. See the [ADK local-authentication guidance](https:/
 
 ## Quickstart
 
-Use Python **3.11–3.13** (the configured CI matrix). The example uses 3.13; choose an
-installed supported version. Quote `'.[dev]'` so installation also works in zsh.
+On a fresh clone, one script does the one-time setup (venv, dependencies, `.env`,
+pre-commit hooks) plus database setup and the initial Jira data load — fill in
+`.env`, then start the pilot:
+
+```bash
+scripts/setup.sh        # one-time setup: venv, deps, .env, Postgres, migrate, collect
+scripts/pilot-up.sh     # Postgres, migrate, collect, serve on http://127.0.0.1:8741
+```
+
+Manual steps, if you prefer them: use Python **3.11–3.13** (the configured CI
+matrix). The example uses 3.13; choose an installed supported version. Quote
+`'.[dev]'` so installation also works in zsh.
 
 ```bash
 python3.13 -m venv .venv

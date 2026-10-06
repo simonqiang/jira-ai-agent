@@ -148,15 +148,16 @@ class Settings(BaseSettings):
             )
         return value
 
-    @field_validator("model_api_key", "model_name", "embedding_api_key", "embedding_model")
+    @field_validator(
+        "model_api_key", "model_name", "embedding_api_key", "embedding_model", mode="before"
+    )
     @classmethod
-    def _model_optional_not_blank(cls, value: object) -> object:
-        if isinstance(value, SecretStr):
-            if not value.get_secret_value().strip():
-                raise ValueError("must not be blank")
-            return value
+    def _model_optional_blank_is_unset(cls, value: object) -> object:
+        # Blank means unset (same as jira_cloud_id/token_expires_on): .env.example
+        # ships these keys blank and optional features degrade gracefully instead
+        # of failing every Settings load.
         if isinstance(value, str) and not value.strip():
-            raise ValueError("must not be blank")
+            return None
         return value
 
     @field_validator("model_base_url")

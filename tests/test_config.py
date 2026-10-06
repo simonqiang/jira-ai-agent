@@ -190,11 +190,12 @@ def test_embedding_base_url_must_be_https_without_trailing_slash() -> None:
     assert settings.embedding_base_url == "https://api.example.com/v4"
 
 
-def test_blank_embedding_values_are_rejected() -> None:
-    with pytest.raises(ValidationError):
-        make_settings(embedding_model="  ")
-    with pytest.raises(ValidationError):
-        make_settings(embedding_api_key="   ")
+def test_blank_embedding_values_are_unset() -> None:
+    # Blank matches unset so a copied .env.example (optional keys left blank)
+    # still loads; features degrade to unconfigured instead of erroring.
+    settings = make_settings(embedding_model="  ", embedding_api_key="   ")
+    assert settings.embedding_model is None
+    assert settings.embedding_api_key is None
 
 
 def test_require_embedding_settings_falls_back_to_the_model_key() -> None:
